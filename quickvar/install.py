@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 import urllib.request
+from urllib.parse import urlparse
 
 from . import __version__
 from .settings import CACHE_DIR, ENV_NAME, MAMBA_ROOT_PREFIX
@@ -53,8 +54,9 @@ def detect_platform_tag() -> str:
 
 
 def resolve_suffix_from_url(url: str) -> str:
-    """Determine archive suffix from a URL."""
-    suffixes = Path(url).suffixes
+    """Determine archive suffix from a URL, ignoring query parameters."""
+    parsed = urlparse(url)
+    suffixes = Path(parsed.path).suffixes
     if suffixes[-2:] == [".tar", ".bz2"]:
         suffix = ".tar.bz2"
     elif suffixes[-1:] == [".zip"]:
