@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quickvar"
+version = "0.1.0"
+description = "Automated alignment and variant calling pipeline for Candida glabrata"
+readme = "README.md"
+authors = [{name = "Ariel Aptekmann", email = "arielaptekmann@hmh-cdi.org"}]
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+quickvar = "quickvar.cli:main"
+quickvar-install = "quickvar.install:main"
+quickvar-align = "quickvar.align:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+packages = ["quickvar"]

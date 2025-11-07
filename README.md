@@ -1,0 +1,104 @@
+# QuickVar
+
+QuickVar provides a cross-platform, one-command workflow to align *Candida glabrata* sequencing reads and perform variant calling. The pipeline automatically downloads the reference genome, installs the required bioinformatics tools, and produces alignment and variant files with minimal user input.
+
+## Features
+- Automatic installation of alignment and variant-calling tools via Micromamba.
+- Automatic download and indexing of the *Candida glabrata* CBS138 reference genome.
+- Supports single-end and paired-end FASTQ files (optionally compressed with gzip).
+- Generates sorted BAM files with indexes and VCF outputs per sample.
+- Cross-platform support (macOS, Linux, Windows) with identical commands.
+
+## Prerequisites
+- Python 3.10 or newer.
+- Internet connection for downloading the reference genome and Micromamba binaries.
+
+Micromamba is installed automatically into a user-level cache (`~/.quickvar`). No system-wide changes are required.
+
+## Quick Start
+
+### Optional: Install the CLI
+```bash
+python -m pip install -e .
+```
+Installing in editable mode exposes the `quickvar`, `quickvar-install`, and `quickvar-align` commands on your PATH. You can also run the modules directly (as shown below) without installing.
+
+### 1. Install QuickVar Dependencies
+```bash
+python -m quickvar.install
+```
+This downloads Micromamba (if needed) and creates the `quickvar` environment containing `minimap2`, `samtools`, and `bcftools`.
+
+> Windows users can run the same command inside Command Prompt or PowerShell.
+
+### 2. Run the Pipeline
+```bash
+python -m quickvar.align --input /path/to/fastqs --output /path/to/results
+```
+- `--input` can point to a single FASTQ file or a directory containing one or more FASTQ files.
+- When not provided, `--output` defaults to a `Results` directory in the current working directory.
+
+Each sample results in:
+- `sample.sorted.bam` and `sample.sorted.bam.bai`
+- `sample.vcf.gz` and `sample.vcf.gz.tbi`
+
+### Sample Detection
+- Paired-end files should include `_R1`/`_R2`, `.R1`/`.R2`, or `_1`/`_2` in their names.
+- Single-end files that do not follow pairing conventions are processed individually.
+
+### Cleaning Up
+To remove the QuickVar Micromamba environment:
+```bash
+python -m quickvar.install --remove
+```
+
+## Hands-On Tutorial
+
+The example below walks through a complete run using public test data.
+
+1. **Prepare working directory**  
+   ```bash
+   mkdir -p ~/quickvar-demo && cd ~/quickvar-demo
+   git clone https://github.com/<your-org>/quickvar.git
+   cd quickvar
+   ```
+
+2. **Install dependencies**  
+   ```bash
+   python -m quickvar.install
+   ```
+   This downloads Micromamba (if necessary) and builds the `quickvar` environment with `minimap2`, `samtools`, and `bcftools`.
+
+3. **Fetch example FASTQ files**  
+   ```bash
+   curl -L -o data/sample_R1.fastq.gz https://github.com/quickvar-test-data/sample_R1.fastq.gz
+   curl -L -o data/sample_R2.fastq.gz https://github.com/quickvar-test-data/sample_R2.fastq.gz
+   ```
+   (Replace the URLs with your own files or directory path as needed.)
+
+4. **Run alignment and variant calling**  
+   ```bash
+   python -m quickvar.align --input data --output DemoResults
+   ```
+   Progress prints to the terminal. Results for each sample land inside `DemoResults/<sample>/`.
+
+5. **Inspect outputs**  
+   ```bash
+   ls DemoResults/sample/
+   samtools flagstat DemoResults/sample/sample.sorted.bam
+   bcftools view DemoResults/sample/sample.vcf.gz | head
+   ```
+
+6. **Clean up (optional)**  
+   ```bash
+   python -m quickvar.install --remove
+   rm -rf ~/.quickvar
+   ```
+   This removes the Micromamba environment and cached reference data.
+
+## Development
+- `pyproject.toml` configures QuickVar as a Python package with console entry points.
+- Unit tests (coming soon) can be run with `pytest` within the QuickVar environment.
+
+## License
+QuickVar is distributed under the MIT License. See `LICENSE` for details.

@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+.envrc
+.cache/
+.coverage
+htmlcov/
+.mypy_cache/
+pytest_cache/
+.eggs/
+*.egg-info/
+Results/
+.tmp/
+quickvar.log
+# Micromamba cache
+.micromamba/
