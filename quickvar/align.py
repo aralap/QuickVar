@@ -210,10 +210,13 @@ def parse_pileup_bases(bases: str, ref: str) -> Dict[str, int]:
                 length_digits.append(bases[i])
                 i += 1
             length = int("".join(length_digits)) if length_digits else 0
+            indel_seq = bases[i : i + length].upper()
             i += length
+            if indel_seq:
+                key = f"{base}{indel_seq}"
+                counts[key] += 1
             continue
         if base == "*":
-            counts["*"] += 1
             i += 1
             continue
         if base in {".", ","}:
@@ -270,7 +273,12 @@ def generate_amplicon_report(
                 if base == ref_upper or count == 0:
                     continue
                 frequency = count / total_depth if total_depth else 0.0
-                mutation = f"{ref_upper}>{base}"
+                if base.startswith("+"):
+                    mutation = f"{ref_upper}>+{base[1:]}"
+                elif base.startswith("-"):
+                    mutation = f"{ref_upper}>-{base[1:]}"
+                else:
+                    mutation = f"{ref_upper}>{base}"
                 handle.write(
                     f"{chrom}\t{pos}\t{ref_upper}\t{base}\t{count}\t{total_depth}\t{frequency:.4f}\t{mutation}\n"
                 )

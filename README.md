@@ -108,7 +108,7 @@ python -m quickvar.align \
   --threads 1
 ```
 
-Expected SNP coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. All synthetic reads carry the alternate allele, so with the haploid default you should see homozygous alternate SNP calls at those loci. When `--amplicon` is provided, the pipeline also writes `<sample>_amplicon.tsv` containing per-position alternate counts and frequencies, using all reads at each site (no pileup depth cap).
+Expected variant coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. The dataset includes two SNPs plus an example insertion (`+AT`) and deletion (`-T`), so with the haploid default you should see homozygous alternate calls at those loci. When `--amplicon` is provided, the pipeline also writes `<sample>_amplicon.tsv` containing per-position alternate counts and frequencies (including insertions/deletions) using all reads at each site (no pileup depth cap).
 
 ## Development
 - `pyproject.toml` configures QuickVar as a Python package with console entry points.
