@@ -69,18 +69,14 @@ The example below walks through a complete run using public test data.
    ```
    This downloads Micromamba (if necessary) and builds the `quickvar` environment with `minimap2`, `samtools`, and `bcftools`.
 
-3. **Fetch example FASTQ files**  
+3. **Run alignment and variant calling**  
    ```bash
-   curl -L -o data/sample_R1.fastq.gz https://github.com/quickvar-test-data/sample_R1.fastq.gz
-   curl -L -o data/sample_R2.fastq.gz https://github.com/quickvar-test-data/sample_R2.fastq.gz
-   ```
-   (Replace the URLs with your own files or directory path as needed.)
-
-4. **Run alignment and variant calling**  
-   ```bash
-   python -m quickvar.align --input data --output DemoResults
+   python -m quickvar.align --input test_data/amplicon/glabrata_amplicon.fastq.gz --output DemoResults
    ```
    Progress prints to the terminal. Results for each sample land inside `DemoResults/<sample>/`.
+
+4. **(Optional) Use your own FASTQs**  
+   Point `--input` at your FASTQ file or a directory containing multiple FASTQs. Paired-end files are paired automatically when they follow `_R1`/`_R2` (or similar) naming.
 
 5. **Inspect outputs**  
    ```bash
