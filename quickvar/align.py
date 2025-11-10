@@ -236,6 +236,8 @@ def generate_amplicon_report(
             "samtools",
             "mpileup",
             "-aa",
+            "-d",
+            "0",
             "-f",
             str(reference["fasta"]),
             str(bam_path),
