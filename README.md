@@ -108,7 +108,7 @@ python -m quickvar.align \
   --threads 1
 ```
 
-Expected SNP coordinates (1-based relative to the original amplicon) are listed in `test_data/amplicon/variants.tsv`.
+Expected SNP coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. The synthetic reads mix reference and alternate alleles so you should observe heterozygous SNP calls at those loci.
 
 ## Development
 - `pyproject.toml` configures QuickVar as a Python package with console entry points.
