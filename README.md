@@ -9,6 +9,7 @@ QuickVar provides a cross-platform, one-command workflow to align *Candida glabr
 - Generates sorted BAM files with indexes and VCF outputs per sample.
 - Cross-platform support (macOS, Linux, Windows) with identical commands.
 - Variant calling defaults to haploid (`--ploidy 1`) but can be configured per run.
+- Amplicon mode (`--amplicon`) emits per-position mutation frequency summaries.
 
 ## Prerequisites
 - Python 3.10 or newer.
@@ -103,10 +104,11 @@ python -m quickvar.align \
   --input test_data/amplicon/glabrata_amplicon.fastq.gz \
   --output AmpliconResults \
   --ploidy 1 \
+  --amplicon \
   --threads 1
 ```
 
-Expected SNP coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. All synthetic reads carry the alternate allele, so with the haploid default you should see homozygous alternate SNP calls at those loci.
+Expected SNP coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. All synthetic reads carry the alternate allele, so with the haploid default you should see homozygous alternate SNP calls at those loci. When `--amplicon` is provided, the pipeline also writes `<sample>_amplicon.tsv` containing per-position alternate counts and frequencies.
 
 ## Development
 - `pyproject.toml` configures QuickVar as a Python package with console entry points.

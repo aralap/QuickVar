@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
@@ -112,6 +113,7 @@ def align_sample(
     threads: int,
     keep_intermediate: bool,
     ploidy: int,
+    amplicon: bool,
 ) -> None:
     logging.info("Processing sample %s", sample.name)
     sample_dir = output_dir / sample.name
@@ -180,6 +182,97 @@ def align_sample(
         if bcf_path.exists():
             bcf_path.unlink()
 
+    if amplicon:
+        generate_amplicon_report(
+            sample=sample,
+            reference=reference,
+            bam_path=bam_path,
+            sample_dir=sample_dir,
+        )
+
+
+def parse_pileup_bases(bases: str, ref: str) -> Dict[str, int]:
+    counts = defaultdict(int)
+    i = 0
+    ref_upper = ref.upper()
+    while i < len(bases):
+        base = bases[i]
+        if base == "^":
+            i += 2
+            continue
+        if base == "$":
+            i += 1
+            continue
+        if base in "+-":
+            i += 1
+            length_digits = []
+            while i < len(bases) and bases[i].isdigit():
+                length_digits.append(bases[i])
+                i += 1
+            length = int("".join(length_digits)) if length_digits else 0
+            i += length
+            continue
+        if base == "*":
+            counts["*"] += 1
+            i += 1
+            continue
+        if base in {".", ","}:
+            counts[ref_upper] += 1
+        else:
+            counts[base.upper()] += 1
+        i += 1
+    return counts
+
+
+def generate_amplicon_report(
+    sample: Sample,
+    reference: Dict[str, Path],
+    bam_path: Path,
+    sample_dir: Path,
+) -> None:
+    logging.info("Generating amplicon summary for sample %s", sample.name)
+    result = micromamba_run(
+        [
+            "samtools",
+            "mpileup",
+            "-aa",
+            "-f",
+            str(reference["fasta"]),
+            str(bam_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    summary_path = sample_dir / f"{sample.name}_amplicon.tsv"
+    with open(summary_path, "w", encoding="utf-8") as handle:
+        handle.write(
+            "chrom\tpos\tref_base\talt_base\talt_count\tdepth\tfrequency\tmutation\n"
+        )
+        for line in result.stdout.splitlines():
+            fields = line.strip().split("\t")
+            if len(fields) < 6:
+                continue
+            chrom, pos, ref_base, depth_str, bases, _quals = fields[:6]
+            try:
+                depth = int(depth_str)
+            except ValueError:
+                continue
+            if depth <= 0:
+                continue
+            counts = parse_pileup_bases(bases, ref_base)
+            total_depth = sum(counts.values())
+            if total_depth == 0:
+                continue
+            ref_upper = ref_base.upper()
+            for base, count in counts.items():
+                if base == ref_upper or count == 0:
+                    continue
+                frequency = count / total_depth if total_depth else 0.0
+                mutation = f"{ref_upper}>{base}"
+                handle.write(
+                    f"{chrom}\t{pos}\t{ref_upper}\t{base}\t{count}\t{total_depth}\t{frequency:.4f}\t{mutation}\n"
+                )
+
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Align FASTQ reads and call variants")
@@ -187,6 +280,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--output", default=DEFAULT_OUTPUT_NAME, help="Directory to write results (default: Results)")
     parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads (default: auto)")
     parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy for variant calling (default: haploid)")
+    parser.add_argument("--amplicon", action="store_true", help="Produce per-position mutation frequency table")
     parser.add_argument("--keep-intermediate", action="store_true", help="Retain SAM and BCF intermediates")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--force-reference", action="store_true", help="Redownload and reindex reference genome")
@@ -210,7 +304,15 @@ def main(argv: list[str] | None = None) -> int:
     samples = group_samples(fastqs)
 
     for sample in samples:
-        align_sample(sample, reference, output_dir, threads, args.keep_intermediate, args.ploidy)
+        align_sample(
+            sample,
+            reference,
+            output_dir,
+            threads,
+            args.keep_intermediate,
+            args.ploidy,
+            args.amplicon,
+        )
 
     logging.info("Completed processing %d sample(s)", len(samples))
     return 0

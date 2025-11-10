@@ -114,13 +114,25 @@ def micromamba_env_exists() -> bool:
     return env_dir.exists() and any(env_dir.iterdir())
 
 
-def run_micromamba(args: Iterable[str], *, check: bool = True) -> subprocess.CompletedProcess:
+def run_micromamba(
+    args: Iterable[str],
+    *,
+    check: bool = True,
+    capture_output: bool = False,
+    text: bool = False,
+) -> subprocess.CompletedProcess:
     """Execute micromamba with the provided arguments."""
     binary = get_micromamba_binary()
     env = os.environ.copy()
     env["MAMBA_ROOT_PREFIX"] = str(MAMBA_ROOT_PREFIX)
     command = [str(binary), *args]
-    return subprocess.run(command, check=check, env=env)
+    return subprocess.run(
+        command,
+        check=check,
+        env=env,
+        capture_output=capture_output,
+        text=text,
+    )
 
 
 def create_environment(force: bool = False) -> None:
@@ -158,10 +170,21 @@ def ensure_environment(force: bool = False) -> Path:
     return MAMBA_ROOT_PREFIX / "envs" / ENV_NAME
 
 
-def micromamba_run(command: Iterable[str], *, check: bool = True) -> subprocess.CompletedProcess:
+def micromamba_run(
+    command: Iterable[str],
+    *,
+    check: bool = True,
+    capture_output: bool = False,
+    text: bool = False,
+) -> subprocess.CompletedProcess:
     """Run a command within the QuickVar environment."""
     run_args = ["run", "-n", ENV_NAME, *command]
-    return run_micromamba(run_args, check=check)
+    return run_micromamba(
+        run_args,
+        check=check,
+        capture_output=capture_output,
+        text=text,
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
