@@ -25,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     align_parser.add_argument("--input", required=True, help="Path to FASTQ file or directory")
     align_parser.add_argument("--output", default=align_module.DEFAULT_OUTPUT_NAME, help="Output directory")
     align_parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads")
+    align_parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy (default: 1)")
     align_parser.add_argument("--keep-intermediate", action="store_true", help="Keep SAM and BCF files")
     align_parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     align_parser.add_argument("--force-reference", action="store_true", help="Redownload reference data")
@@ -60,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             "--threads",
             str(args.threads),
+            "--ploidy",
+            str(args.ploidy),
         ]
         if args.keep_intermediate:
             align_args.append("--keep-intermediate")

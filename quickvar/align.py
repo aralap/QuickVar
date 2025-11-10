@@ -105,7 +105,14 @@ def group_samples(fastqs: Iterable[Path]) -> List[Sample]:
     return merged
 
 
-def align_sample(sample: Sample, reference: Dict[str, Path], output_dir: Path, threads: int, keep_intermediate: bool) -> None:
+def align_sample(
+    sample: Sample,
+    reference: Dict[str, Path],
+    output_dir: Path,
+    threads: int,
+    keep_intermediate: bool,
+    ploidy: int,
+) -> None:
     logging.info("Processing sample %s", sample.name)
     sample_dir = output_dir / sample.name
     sample_dir.mkdir(parents=True, exist_ok=True)
@@ -157,6 +164,8 @@ def align_sample(sample: Sample, reference: Dict[str, Path], output_dir: Path, t
         "call",
         "-mv",
         "-Oz",
+        "--ploidy",
+        str(ploidy),
         "-o",
         str(vcf_path),
         str(bcf_path),
@@ -177,6 +186,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--input", required=True, help="Path to FASTQ file or directory containing FASTQs")
     parser.add_argument("--output", default=DEFAULT_OUTPUT_NAME, help="Directory to write results (default: Results)")
     parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads (default: auto)")
+    parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy for variant calling (default: haploid)")
     parser.add_argument("--keep-intermediate", action="store_true", help="Retain SAM and BCF intermediates")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--force-reference", action="store_true", help="Redownload and reindex reference genome")
@@ -200,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     samples = group_samples(fastqs)
 
     for sample in samples:
-        align_sample(sample, reference, output_dir, threads, args.keep_intermediate)
+        align_sample(sample, reference, output_dir, threads, args.keep_intermediate, args.ploidy)
 
     logging.info("Completed processing %d sample(s)", len(samples))
     return 0
