@@ -96,6 +96,20 @@ The example below walks through a complete run using public test data.
    ```
    This removes the Micromamba environment and cached reference data.
 
+### Built-in Test Dataset
+
+The repository ships with a tiny synthetic amplicon dataset in `test_data/amplicon/glabrata_amplicon.fastq.gz`.
+
+Run it end-to-end with:
+```bash
+python -m quickvar.align \
+  --input test_data/amplicon/glabrata_amplicon.fastq.gz \
+  --output AmpliconResults \
+  --threads 1
+```
+
+Expected SNP coordinates (1-based relative to the original amplicon) are listed in `test_data/amplicon/variants.tsv`.
+
 ## Development
 - `pyproject.toml` configures QuickVar as a Python package with console entry points.
 - Unit tests (coming soon) can be run with `pytest` within the QuickVar environment.
