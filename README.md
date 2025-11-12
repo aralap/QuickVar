@@ -26,12 +26,25 @@ python -m pip install -e .
 Installing in editable mode exposes the `quickvar`, `quickvar-install`, and `quickvar-align` commands on your PATH. You can also run the modules directly (as shown below) without installing.
 
 ### 1. Install QuickVar Dependencies
+
+#### Linux / macOS
 ```bash
 python -m quickvar.install
 ```
 This downloads Micromamba (if needed) and creates the `quickvar` environment containing `minimap2`, `samtools`, and `bcftools`.
 
-> Windows users can run the same command inside Command Prompt or PowerShell.
+#### Windows (WSL2)
+1. Open **PowerShell as Administrator** and enable Ubuntu on WSL2:
+   ```powershell
+   wsl --install -d Ubuntu
+   ```
+   Reboot if prompted and complete the first-run setup (username/password).
+2. Launch the **Ubuntu** terminal and run QuickVar from there:
+   ```bash
+   cd /mnt/c/path/to/QuickVar   # adjust the repo path
+   python -m quickvar.install
+   ```
+   Windows drives are available inside WSL under `/mnt/<drive-letter>/...`, and you can open WSL paths from Explorer via `\\wsl$\Ubuntu\`.
 
 ### 2. Run the Pipeline
 ```bash
@@ -69,7 +82,8 @@ The example below walks through a complete run using public test data.
    ```bash
    python -m quickvar.install
    ```
-   This downloads Micromamba (if necessary) and builds the `quickvar` environment with `minimap2`, `samtools`, and `bcftools`.
+   This downloads Micromamba (if necessary) and builds the `quickvar` environment with `minimap2`, `samtools`, and `bcftools`.  
+   *Windows users:* run this command inside an Ubuntu WSL2 session (see Quick Start step 1).
 
 3. **Run alignment and variant calling**  
    ```bash
