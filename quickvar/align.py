@@ -234,6 +234,7 @@ def generate_amplicon_report(
     sample_dir: Path,
 ) -> None:
     logging.info("Generating amplicon summary for sample %s", sample.name)
+    igv_depths = load_igv_depths(bam_path)
     result = micromamba_run(
         [
             "samtools",
@@ -251,15 +252,16 @@ def generate_amplicon_report(
     summary_path = sample_dir / f"{sample.name}_amplicon.tsv"
     with open(summary_path, "w", encoding="utf-8") as handle:
         handle.write(
-            "chrom\tpos\tref_base\talt_base\talt_count\tdepth\tfrequency\tmutation\n"
+            "chrom\tpos\tref_base\talt_base\talt_count\tdepth\tfrequency\tmutation\tigv_depth\n"
         )
         for line in result.stdout.splitlines():
             fields = line.strip().split("\t")
             if len(fields) < 6:
                 continue
-            chrom, pos, ref_base, depth_str, bases, _quals = fields[:6]
+            chrom, pos_str, ref_base, depth_str, bases, _quals = fields[:6]
             try:
                 depth = int(depth_str)
+                pos_int = int(pos_str)
             except ValueError:
                 continue
             if depth <= 0:
@@ -269,6 +271,7 @@ def generate_amplicon_report(
             if total_depth == 0:
                 continue
             ref_upper = ref_base.upper()
+            igv_depth = igv_depths.get((chrom, pos_int), 0)
             for base, count in counts.items():
                 if base == ref_upper or count == 0:
                     continue
@@ -280,8 +283,38 @@ def generate_amplicon_report(
                 else:
                     mutation = f"{ref_upper}>{base}"
                 handle.write(
-                    f"{chrom}\t{pos}\t{ref_upper}\t{base}\t{count}\t{total_depth}\t{frequency:.4f}\t{mutation}\n"
+                    f"{chrom}\t{pos_int}\t{ref_upper}\t{base}\t{count}\t{total_depth}\t{frequency:.4f}\t{mutation}\t{igv_depth}\n"
                 )
+
+
+def load_igv_depths(bam_path: Path) -> Dict[tuple[str, int], int]:
+    result = micromamba_run(
+        [
+            "samtools",
+            "depth",
+            "-aa",
+            "-d",
+            "0",
+            "-Q",
+            "0",
+            "-q",
+            "0",
+            str(bam_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    depths: Dict[tuple[str, int], int] = {}
+    for line in result.stdout.splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) != 3:
+            continue
+        chrom, pos_str, depth_str = parts
+        try:
+            depths[(chrom, int(pos_str))] = int(depth_str)
+        except ValueError:
+            continue
+    return depths
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
