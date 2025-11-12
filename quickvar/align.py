@@ -253,7 +253,7 @@ def generate_amplicon_report(
     with open(summary_path, "w", encoding="utf-8") as handle:
         handle.write(
             (
-                "chrom\tpos\tref_base\talt_base\talt_count\tdepth\tfrequency\tmutation\t"
+                "chrom\tpos\tref_base\talt_base\talt_count\tref_count\tdepth\tfrequency\tmutation\t"
                 "igv_depth\testimated_coverage\testimated_frequency\n"
             )
         )
@@ -276,6 +276,7 @@ def generate_amplicon_report(
             ref_upper = ref_base.upper()
             igv_depth = igv_depths.get((chrom, pos_int), 0)
             estimated_cov = estimate_neighbor_depth(igv_depths, chrom, pos_int)
+            ref_count = counts.get(ref_upper, 0)
             for base, count in counts.items():
                 if base == ref_upper or count == 0:
                     continue
@@ -288,7 +289,7 @@ def generate_amplicon_report(
                 else:
                     mutation = f"{ref_upper}>{base}"
                 handle.write(
-                    f"{chrom}\t{pos_int}\t{ref_upper}\t{base}\t{count}\t{total_depth}\t"
+                    f"{chrom}\t{pos_int}\t{ref_upper}\t{base}\t{count}\t{ref_count}\t{total_depth}\t"
                     f"{frequency:.4f}\t{mutation}\t{igv_depth}\t{estimated_cov:.2f}\t"
                     f"{estimated_freq:.4f}\n"
                 )
