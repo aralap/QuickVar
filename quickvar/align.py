@@ -114,12 +114,14 @@ def align_sample(
     keep_intermediate: bool,
     ploidy: int,
     amplicon: bool,
+    deduplicate: bool,
 ) -> None:
     logging.info("Processing sample %s", sample.name)
     sample_dir = output_dir / sample.name
     sample_dir.mkdir(parents=True, exist_ok=True)
     sam_path = sample_dir / f"{sample.name}.sam"
     bam_path = sample_dir / f"{sample.name}.sorted.bam"
+    markdup_bam = sample_dir / f"{sample.name}.sorted.markdup.bam"
     bcf_path = sample_dir / f"{sample.name}.bcf"
     vcf_path = sample_dir / f"{sample.name}.vcf.gz"
 
@@ -147,7 +149,24 @@ def align_sample(
     ]
     micromamba_run(samtools_sort_args)
 
-    micromamba_run(["samtools", "index", str(bam_path)])
+    final_bam = bam_path
+    if deduplicate:
+        micromamba_run(
+            [
+                "samtools",
+                "markdup",
+                "-@",
+                str(max(1, threads - 1)),
+                "-r",
+                str(bam_path),
+                str(markdup_bam),
+            ]
+        )
+        markdup_bam.replace(bam_path)
+        final_bam = bam_path
+
+
+    micromamba_run(["samtools", "index", str(final_bam)])
 
     bcftools_mpileup = [
         "bcftools",
@@ -157,7 +176,7 @@ def align_sample(
         str(reference["fasta"]),
         "-o",
         str(bcf_path),
-        str(bam_path),
+        str(final_bam),
     ]
     micromamba_run(bcftools_mpileup)
 
@@ -181,12 +200,17 @@ def align_sample(
             sam_path.unlink()
         if bcf_path.exists():
             bcf_path.unlink()
+        if deduplicate and markdup_bam.exists():
+            markdup_bam.unlink()
+            markdup_index = markdup_bam.with_suffix(".bam.bai")
+            if markdup_index.exists():
+                markdup_index.unlink()
 
     if amplicon:
         generate_amplicon_report(
             sample=sample,
             reference=reference,
-            bam_path=bam_path,
+            bam_path=final_bam,
             sample_dir=sample_dir,
         )
 
@@ -250,10 +274,11 @@ def generate_amplicon_report(
         text=True,
     )
     summary_path = sample_dir / f"{sample.name}_amplicon.tsv"
+    indel_records: list[dict[str, object]] = []
     with open(summary_path, "w", encoding="utf-8") as handle:
         handle.write(
             (
-                "chrom\tpos\tref_base\talt_base\talt_count\tref_count\tdepth\tfrequency\tmutation\t"
+                "chrom\tpos\tref_base\talt_base\talt_count\tdepth\tfrequency\tmutation\t"
                 "igv_depth\testimated_coverage\testimated_frequency\n"
             )
         )
@@ -276,7 +301,6 @@ def generate_amplicon_report(
             ref_upper = ref_base.upper()
             igv_depth = igv_depths.get((chrom, pos_int), 0)
             estimated_cov = estimate_neighbor_depth(igv_depths, chrom, pos_int)
-            ref_count = counts.get(ref_upper, 0)
             for base, count in counts.items():
                 if base == ref_upper or count == 0:
                     continue
@@ -289,9 +313,43 @@ def generate_amplicon_report(
                 else:
                     mutation = f"{ref_upper}>{base}"
                 handle.write(
-                    f"{chrom}\t{pos_int}\t{ref_upper}\t{base}\t{count}\t{ref_count}\t{total_depth}\t"
+                    f"{chrom}\t{pos_int}\t{ref_upper}\t{base}\t{count}\t{total_depth}\t"
                     f"{frequency:.4f}\t{mutation}\t{igv_depth}\t{estimated_cov:.2f}\t"
                     f"{estimated_freq:.4f}\n"
+                )
+                if base.startswith("+") or base.startswith("-"):
+                    indel_records.append(
+                        {
+                            "chrom": chrom,
+                            "pos": pos_int,
+                            "ref": ref_upper,
+                            "alt": base,
+                            "alt_count": count,
+                            "total_depth": total_depth,
+                            "frequency": frequency,
+                            "estimated_frequency": estimated_freq,
+                        }
+                    )
+
+    if indel_records:
+        indel_path = sample_dir / f"{sample.name}_amplicon_indels.tsv"
+        with open(indel_path, "w", encoding="utf-8") as indel_file:
+            indel_file.write(
+                "chrom\twindow_start\twindow_end\tpos\tref_base\talt_base\talt_count\t"
+                "total_depth\twt_count_in_10bp\tfrequency\testimated_frequency\n"
+            )
+            for record in indel_records:
+                pos_int = int(record["pos"])
+                window_start = pos_int - 5
+                window_end = pos_int + 5
+                total_depth = int(record["total_depth"])
+                alt_count = int(record["alt_count"])
+                wt_count = max(total_depth - alt_count, 0)
+                indel_file.write(
+                    f"{record['chrom']}\t{window_start}\t{window_end}\t{pos_int}\t"
+                    f"{record['ref']}\t{record['alt']}\t{alt_count}\t{total_depth}\t"
+                    f"{wt_count}\t{record['frequency']:.4f}\t"
+                    f"{record['estimated_frequency']:.4f}\n"
                 )
 
 
@@ -352,6 +410,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads (default: auto)")
     parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy for variant calling (default: haploid)")
     parser.add_argument("--amplicon", action="store_true", help="Produce per-position mutation frequency table")
+    parser.add_argument("--deduplicate", action="store_true", help="Remove PCR duplicates using samtools markdup")
     parser.add_argument("--keep-intermediate", action="store_true", help="Retain SAM and BCF intermediates")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--force-reference", action="store_true", help="Redownload and reindex reference genome")
@@ -383,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
             args.keep_intermediate,
             args.ploidy,
             args.amplicon,
+            args.deduplicate,
         )
 
     logging.info("Completed processing %d sample(s)", len(samples))

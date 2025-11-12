@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     align_parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads")
     align_parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy (default: 1)")
     align_parser.add_argument("--amplicon", action="store_true", help="Generate per-position amplicon summary")
+    align_parser.add_argument("--deduplicate", action="store_true", help="Remove PCR duplicates with samtools markdup")
     align_parser.add_argument("--keep-intermediate", action="store_true", help="Keep SAM and BCF files")
     align_parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     align_parser.add_argument("--force-reference", action="store_true", help="Redownload reference data")
@@ -67,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if args.amplicon:
             align_args.append("--amplicon")
+        if args.deduplicate:
+            align_args.append("--deduplicate")
         if args.keep_intermediate:
             align_args.append("--keep-intermediate")
         if args.verbose:

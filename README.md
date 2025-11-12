@@ -10,6 +10,7 @@ QuickVar provides a cross-platform, one-command workflow to align *Candida glabr
 - Cross-platform support (macOS, Linux, Windows) with identical commands.
 - Variant calling defaults to haploid (`--ploidy 1`) but can be configured per run.
 - Amplicon mode (`--amplicon`) emits per-position mutation frequency summaries.
+- Optional PCR duplicate removal via `--deduplicate` (powered by `samtools markdup`).
 
 ## Prerequisites
 - Python 3.10 or newer.
@@ -92,7 +93,7 @@ The example below walks through a complete run using public test data.
      --output DemoResults \
      --amplicon
    ```
-   Progress prints to the terminal. Results for each sample land inside `DemoResults/<sample>/`. The `--amplicon` flag adds a per-position summary TSV in addition to the alignment/variant files.
+   Progress prints to the terminal. Results for each sample land inside `DemoResults/<sample>/`. Add `--deduplicate` if you want duplicate reads removed before variant calling. The `--amplicon` flag adds a per-position summary TSV in addition to the alignment/variant files.
 
 4. **(Optional) Use your own FASTQs**  
    Point `--input` at your FASTQ file or a directory containing multiple FASTQs. Paired-end files are paired automatically when they follow `_R1`/`_R2` (or similar) naming.
@@ -126,7 +127,9 @@ python -m quickvar.align \
   --threads 1
 ```
 
-Expected variant coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. The dataset includes two SNPs plus an example insertion (`+AT`) and deletion (`-T`), so with the haploid default you should see homozygous alternate calls at those loci. When `--amplicon` is provided, the pipeline also writes `<sample>_amplicon.tsv` containing per-position alternate counts and frequencies (including insertions/deletions) using all reads at each site (no pileup depth cap), plus `ref_count` (reference-supporting reads), `igv_depth` (raw IGV-style coverage), `estimated_coverage` (mean flanking coverage within ±5 bp excluding the focal base), and `estimated_frequency` (alternate counts over the estimated coverage).
+Append `--deduplicate` if you want the example to remove duplicate reads before summarising/variant calling.
+
+Expected variant coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. The dataset includes two SNPs plus an example insertion (`+AT`) and deletion (`-T`), so with the haploid default you should see homozygous alternate calls at those loci. When `--amplicon` is provided, the pipeline also writes `<sample>_amplicon.tsv` containing per-position alternate counts and frequencies (including insertions/deletions) using all reads at each site (no pileup depth cap), plus `igv_depth` (raw IGV-style coverage), `estimated_coverage` (mean flanking coverage within ±5 bp excluding the focal base), and `estimated_frequency` (alternate counts over the estimated coverage). A secondary `<sample>_amplicon_indels.tsv` highlights 10 bp windows around indels with wild-type read counts (`wt_count_in_10bp`).
 
 ## Development
 - `pyproject.toml` configures QuickVar as a Python package with console entry points.
