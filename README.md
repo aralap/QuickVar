@@ -108,7 +108,7 @@ python -m quickvar.align \
   --threads 1
 ```
 
-Expected variant coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. The dataset includes two SNPs plus an example insertion (`+AT`) and deletion (`-T`), so with the haploid default you should see homozygous alternate calls at those loci. When `--amplicon` is provided, the pipeline also writes `<sample>_amplicon.tsv` containing per-position alternate counts and frequencies (including insertions/deletions) using all reads at each site (no pileup depth cap), plus an `igv_depth` column that mirrors IGV’s raw coverage (`samtools depth -aa -d 0 -Q 0 -q 0`).
+Expected variant coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. The dataset includes two SNPs plus an example insertion (`+AT`) and deletion (`-T`), so with the haploid default you should see homozygous alternate calls at those loci. When `--amplicon` is provided, the pipeline also writes `<sample>_amplicon.tsv` containing per-position alternate counts and frequencies (including insertions/deletions) using all reads at each site (no pileup depth cap), plus `igv_depth` (raw IGV-style coverage), `estimated_coverage` (mean flanking coverage within ±5 bp excluding the focal base), and `estimated_frequency` (alternate counts over `estimated_coverage`).
 
 ## Development
 - `pyproject.toml` configures QuickVar as a Python package with console entry points.

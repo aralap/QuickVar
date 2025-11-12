@@ -252,7 +252,10 @@ def generate_amplicon_report(
     summary_path = sample_dir / f"{sample.name}_amplicon.tsv"
     with open(summary_path, "w", encoding="utf-8") as handle:
         handle.write(
-            "chrom\tpos\tref_base\talt_base\talt_count\tdepth\tfrequency\tmutation\tigv_depth\n"
+            (
+                "chrom\tpos\tref_base\talt_base\talt_count\tdepth\tfrequency\tmutation\t"
+                "igv_depth\testimated_coverage\testimated_frequency\n"
+            )
         )
         for line in result.stdout.splitlines():
             fields = line.strip().split("\t")
@@ -272,10 +275,12 @@ def generate_amplicon_report(
                 continue
             ref_upper = ref_base.upper()
             igv_depth = igv_depths.get((chrom, pos_int), 0)
+            estimated_cov = estimate_neighbor_depth(igv_depths, chrom, pos_int)
             for base, count in counts.items():
                 if base == ref_upper or count == 0:
                     continue
                 frequency = count / total_depth if total_depth else 0.0
+                estimated_freq = count / estimated_cov if estimated_cov > 0 else 0.0
                 if base.startswith("+"):
                     mutation = f"{ref_upper}>+{base[1:]}"
                 elif base.startswith("-"):
@@ -283,7 +288,9 @@ def generate_amplicon_report(
                 else:
                     mutation = f"{ref_upper}>{base}"
                 handle.write(
-                    f"{chrom}\t{pos_int}\t{ref_upper}\t{base}\t{count}\t{total_depth}\t{frequency:.4f}\t{mutation}\t{igv_depth}\n"
+                    f"{chrom}\t{pos_int}\t{ref_upper}\t{base}\t{count}\t{total_depth}\t"
+                    f"{frequency:.4f}\t{mutation}\t{igv_depth}\t{estimated_cov:.2f}\t"
+                    f"{estimated_freq:.4f}\n"
                 )
 
 
@@ -315,6 +322,26 @@ def load_igv_depths(bam_path: Path) -> Dict[tuple[str, int], int]:
         except ValueError:
             continue
     return depths
+
+
+def estimate_neighbor_depth(
+    depths: Dict[tuple[str, int], int],
+    chrom: str,
+    center_pos: int,
+    flank: int = 5,
+) -> float:
+    values: list[int] = []
+    for offset in range(-flank, flank + 1):
+        if offset == 0:
+            continue
+        key = (chrom, center_pos + offset)
+        if key in depths:
+            depth_value = depths[key]
+            if depth_value > 0:
+                values.append(depth_value)
+    if not values:
+        return float(depths.get((chrom, center_pos), 0))
+    return sum(values) / len(values)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
