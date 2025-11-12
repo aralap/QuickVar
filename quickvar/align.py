@@ -14,6 +14,7 @@ import os
 
 from .install import ensure_environment, micromamba_run
 from .reference import ensure_reference
+from .settings import REFERENCE_REGISTRY
 
 FASTQ_SUFFIXES = (".fastq", ".fq", ".fastq.gz", ".fq.gz")
 DEFAULT_OUTPUT_NAME = "Results"
@@ -275,6 +276,7 @@ def generate_amplicon_report(
     )
     summary_path = sample_dir / f"{sample.name}_amplicon.tsv"
     indel_records: list[dict[str, object]] = []
+    position_data: Dict[tuple[str, int], tuple[str, Dict[str, int], int]] = {}
     with open(summary_path, "w", encoding="utf-8") as handle:
         handle.write(
             (
@@ -301,6 +303,7 @@ def generate_amplicon_report(
             ref_upper = ref_base.upper()
             igv_depth = igv_depths.get((chrom, pos_int), 0)
             estimated_cov = estimate_neighbor_depth(igv_depths, chrom, pos_int)
+            position_data[(chrom, pos_int)] = (ref_upper, counts.copy(), total_depth)
             for base, count in counts.items():
                 if base == ref_upper or count == 0:
                     continue
@@ -344,13 +347,32 @@ def generate_amplicon_report(
                 window_end = pos_int + 5
                 total_depth = int(record["total_depth"])
                 alt_count = int(record["alt_count"])
-                wt_count = max(total_depth - alt_count, 0)
+                wt_count = estimate_wildtype_window(position_data, record["chrom"], pos_int, flank=5)
                 indel_file.write(
                     f"{record['chrom']}\t{window_start}\t{window_end}\t{pos_int}\t"
                     f"{record['ref']}\t{record['alt']}\t{alt_count}\t{total_depth}\t"
                     f"{wt_count}\t{record['frequency']:.4f}\t"
                     f"{record['estimated_frequency']:.4f}\n"
                 )
+
+
+def estimate_wildtype_window(
+    position_data: Dict[tuple[str, int], tuple[str, Dict[str, int], int]],
+    chrom: str,
+    center_pos: int,
+    flank: int = 5,
+) -> int:
+    ref_counts: list[int] = []
+    for offset in range(-flank, flank + 1):
+        key = (chrom, center_pos + offset)
+        data = position_data.get(key)
+        if not data:
+            continue
+        ref_base, counts, _ = data
+        ref_counts.append(counts.get(ref_base, 0))
+    if not ref_counts:
+        return 0
+    return min(ref_counts)
 
 
 def load_igv_depths(bam_path: Path) -> Dict[tuple[str, int], int]:
@@ -409,6 +431,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--output", default=DEFAULT_OUTPUT_NAME, help="Directory to write results (default: Results)")
     parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads (default: auto)")
     parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy for variant calling (default: haploid)")
+    parser.add_argument(
+        "--reference",
+        choices=sorted(REFERENCE_REGISTRY.keys()),
+        default="c_glabrata",
+        help="Reference genome to use (default: c_glabrata)",
+    )
     parser.add_argument("--amplicon", action="store_true", help="Produce per-position mutation frequency table")
     parser.add_argument("--deduplicate", action="store_true", help="Remove PCR duplicates using samtools markdup")
     parser.add_argument("--keep-intermediate", action="store_true", help="Retain SAM and BCF intermediates")
@@ -428,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
     threads = args.threads or max(1, (os.cpu_count() or 2) - 1)
 
     ensure_environment()
-    reference = ensure_reference(force=args.force_reference)
+    reference = ensure_reference(reference_key=args.reference, force=args.force_reference)
 
     fastqs = discover_fastqs(input_path)
     samples = group_samples(fastqs)

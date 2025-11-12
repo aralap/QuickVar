@@ -5,6 +5,7 @@ QuickVar provides a cross-platform, one-command workflow to align *Candida glabr
 ## Features
 - Automatic installation of alignment and variant-calling tools via Micromamba.
 - Automatic download and indexing of the *Candida glabrata* CBS138 reference genome.
+- Supports *Candida glabrata* (default) and *Candida auris* references (switch via `--reference`).
 - Supports single-end and paired-end FASTQ files (optionally compressed with gzip).
 - Generates sorted BAM files with indexes and VCF outputs per sample.
 - Cross-platform support (macOS, Linux, Windows) with identical commands.
@@ -130,6 +131,18 @@ python -m quickvar.align \
 Append `--deduplicate` if you want the example to remove duplicate reads before summarising/variant calling.
 
 Expected variant coordinates (contig + 1-based position) are listed in `test_data/amplicon/variants.tsv`. The dataset includes two SNPs plus an example insertion (`+AT`) and deletion (`-T`), so with the haploid default you should see homozygous alternate calls at those loci. When `--amplicon` is provided, the pipeline also writes `<sample>_amplicon.tsv` containing per-position alternate counts and frequencies (including insertions/deletions) using all reads at each site (no pileup depth cap), plus `igv_depth` (raw IGV-style coverage), `estimated_coverage` (mean flanking coverage within ±5 bp excluding the focal base), and `estimated_frequency` (alternate counts over the estimated coverage). A secondary `<sample>_amplicon_indels.tsv` highlights 10 bp windows around indels with wild-type read counts (`wt_count_in_10bp`).
+
+### Using the *Candida auris* reference
+
+Supply `--reference c_auris` when installing/aligning to use the bundled *Candida auris* B11221 reference:
+
+```bash
+python -m quickvar.align \
+  --input your_reads.fastq.gz \
+  --output AurisResults \
+  --reference c_auris \
+  --amplicon
+```
 
 ## Development
 - `pyproject.toml` configures QuickVar as a Python package with console entry points.

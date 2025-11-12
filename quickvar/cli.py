@@ -8,6 +8,7 @@ import sys
 from . import __version__
 from . import align as align_module
 from . import install as install_module
+from .settings import REFERENCE_REGISTRY
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,6 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
     align_parser.add_argument("--output", default=align_module.DEFAULT_OUTPUT_NAME, help="Output directory")
     align_parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads")
     align_parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy (default: 1)")
+    align_parser.add_argument(
+        "--reference",
+        choices=sorted(REFERENCE_REGISTRY.keys()),
+        default="c_glabrata",
+        help="Reference genome identifier (default: c_glabrata)",
+    )
     align_parser.add_argument("--amplicon", action="store_true", help="Generate per-position amplicon summary")
     align_parser.add_argument("--deduplicate", action="store_true", help="Remove PCR duplicates with samtools markdup")
     align_parser.add_argument("--keep-intermediate", action="store_true", help="Keep SAM and BCF files")
@@ -70,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
             align_args.append("--amplicon")
         if args.deduplicate:
             align_args.append("--deduplicate")
+        align_args.extend(["--reference", args.reference])
         if args.keep_intermediate:
             align_args.append("--keep-intermediate")
         if args.verbose:
