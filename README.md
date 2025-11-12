@@ -73,9 +73,12 @@ The example below walks through a complete run using public test data.
 
 3. **Run alignment and variant calling**  
    ```bash
-   python -m quickvar.align --input test_data/amplicon/glabrata_amplicon.fastq.gz --output DemoResults
+   python -m quickvar.align \
+     --input test_data/amplicon/glabrata_amplicon.fastq.gz \
+     --output DemoResults \
+     --amplicon
    ```
-   Progress prints to the terminal. Results for each sample land inside `DemoResults/<sample>/`.
+   Progress prints to the terminal. Results for each sample land inside `DemoResults/<sample>/`. The `--amplicon` flag adds a per-position summary TSV in addition to the alignment/variant files.
 
 4. **(Optional) Use your own FASTQs**  
    Point `--input` at your FASTQ file or a directory containing multiple FASTQs. Paired-end files are paired automatically when they follow `_R1`/`_R2` (or similar) naming.
@@ -85,6 +88,7 @@ The example below walks through a complete run using public test data.
    ls DemoResults/sample/
    samtools flagstat DemoResults/sample/sample.sorted.bam
    bcftools view DemoResults/sample/sample.vcf.gz | head
+   column -t DemoResults/sample/sample_amplicon.tsv | head
    ```
 
 6. **Clean up (optional)**  
