@@ -23,11 +23,14 @@ Micromamba is installed automatically into a user-level cache (`~/.quickvar`). N
 
 ## Quick Start
 
-### Optional: Install the CLI
+### Optional: Install the CLI and Python Dependencies
 ```bash
 python -m pip install -e .
 ```
-Installing in editable mode exposes the `quickvar`, `quickvar-install`, and `quickvar-align` commands on your PATH. You can also run the modules directly (as shown below) without installing.
+Installing in editable mode:
+- Exposes the `quickvar`, `quickvar-install`, and `quickvar-align` commands on your PATH
+- Installs Python dependencies (currently `pysradb` for BioProject/SRA functionality)
+- You can also run the modules directly (as shown below) without installing, but you'll need to install `pysradb` separately if using `--bioproject`
 
 ### 1. Install QuickVar Dependencies
 
@@ -94,10 +97,14 @@ The example below walks through a complete run using public test data.
 
 2. **Install dependencies**  
    ```bash
+   # Install Python dependencies (including pysradb for BioProject support)
+   python -m pip install -e .
+   
+   # Install bioinformatics tools via Micromamba
    python -m quickvar.install
    ```
-   This downloads Micromamba (if necessary) and builds the `quickvar` environment with `minimap2`, `samtools`, and `bcftools`.  
-   *Windows users:* run this command inside an Ubuntu WSL2 session (see Quick Start step 1).
+   This installs Python dependencies (like `pysradb`) and downloads Micromamba (if necessary) to build the `quickvar` environment with `minimap2`, `samtools`, `bcftools`, and `sra-tools`.  
+   *Windows users:* run these commands inside an Ubuntu WSL2 session (see Quick Start step 1).
 
 3. **Run alignment and variant calling**  
    ```bash

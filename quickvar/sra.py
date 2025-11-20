@@ -138,7 +138,10 @@ def query_bioproject(bioproject_id: str) -> List[str]:
         return run_ids
         
     except ImportError:
-        logging.error("pysradb not installed. Install with: pip install pysradb")
+        logging.error(
+            "pysradb not installed. Install Python dependencies with: "
+            "pip install -e .  (or: pip install pysradb)"
+        )
         raise
     except Exception as e:
         logging.error(f"Failed to query BioProject {bioproject_id}: {e}")
