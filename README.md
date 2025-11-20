@@ -29,7 +29,7 @@ python -m pip install -e .
 ```
 Installing in editable mode exposes the `quickvar`, `quickvar-install`, and `quickvar-align` commands on your PATH. You can also run the modules directly (as shown below) without installing.
 
-**Note:** All dependencies including `pysradb` are automatically installed in the Micromamba environment when you run `python -m quickvar.install`.
+**Note:** All dependencies are automatically installed in the Micromamba environment when you run `python -m quickvar.install`. BioProject/SRA functionality uses Python's standard library only (no extra dependencies needed).
 
 ### 1. Install QuickVar Dependencies
 
@@ -37,7 +37,7 @@ Installing in editable mode exposes the `quickvar`, `quickvar-install`, and `qui
 ```bash
 python -m quickvar.install
 ```
-This downloads Micromamba (if needed) and creates the `quickvar` environment containing `minimap2`, `samtools`, `bcftools`, `sra-tools`, and `pysradb` (from bioconda).
+This downloads Micromamba (if needed) and creates the `quickvar` environment containing `minimap2`, `samtools`, `bcftools`, and `sra-tools`. BioProject queries use NCBI Entrez API (no additional dependencies needed).
 
 #### Windows (WSL2)
 1. Open **PowerShell as Administrator** and enable Ubuntu on WSL2:
@@ -98,7 +98,7 @@ The example below walks through a complete run using public test data.
    ```bash
    python -m quickvar.install
    ```
-   This downloads Micromamba (if necessary) and builds the `quickvar` environment with `minimap2`, `samtools`, `bcftools`, `sra-tools`, and `pysradb` (for BioProject support). All dependencies are installed automatically via Micromamba from conda-forge and bioconda.  
+   This downloads Micromamba (if necessary) and builds the `quickvar` environment with `minimap2`, `samtools`, `bcftools`, and `sra-tools`. BioProject queries use NCBI Entrez API via Python's standard library (no additional dependencies needed).  
    *Windows users:* run this command inside an Ubuntu WSL2 session (see Quick Start step 1).
 
 3. **Run alignment and variant calling**  
