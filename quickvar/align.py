@@ -200,7 +200,7 @@ def align_sample(
 
     micromamba_run(["bcftools", "index", str(vcf_path)])
 
-    # Optional VCF annotation
+    # Optional VCF annotation (with consequences)
     if annotate:
         try:
             annotation_bgz = ensure_annotations(reference_key, reference)
@@ -509,6 +509,350 @@ def parse_gff_annotations(gff_path: Path) -> Dict[Tuple[str, int, int], Dict[str
     return annotations
 
 
+def parse_gff_cds_features(gff_path: Path) -> Dict[str, List[Dict[str, any]]]:
+    """
+    Parse GFF file and extract CDS features grouped by transcript/gene.
+    Returns a dictionary mapping gene_id -> list of CDS features with coordinates, strand, phase.
+    """
+    cds_features: Dict[str, List[Dict[str, any]]] = {}
+    
+    if not gff_path.exists():
+        return cds_features
+    
+    open_func = gzip.open if gff_path.suffix == ".gz" or str(gff_path).endswith(".gz") else open
+    mode = "rt" if open_func == open else "rt"
+    
+    try:
+        with open_func(gff_path, mode) as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                
+                fields = line.split("\t")
+                if len(fields) < 9:
+                    continue
+                
+                feature_type = fields[2]
+                if feature_type != "CDS":
+                    continue
+                
+                try:
+                    chrom = fields[0]
+                    start = int(fields[3])
+                    end = int(fields[4])
+                    strand = fields[6]  # + or -
+                    phase = fields[7] if len(fields) > 7 else "0"  # 0, 1, or 2
+                except (ValueError, IndexError):
+                    continue
+                
+                attrs = parse_gff_attributes(fields[8])
+                parent = attrs.get("Parent", "")
+                gene_id = attrs.get("ID", parent)  # Use Parent or ID as gene identifier
+                
+                # Extract gene ID from parent if available
+                if "Parent" in attrs:
+                    # Try to get gene ID from parent transcript
+                    parent_id = attrs["Parent"]
+                    # For now, use parent ID as the key (we can improve this later)
+                    gene_id = parent_id.split("-")[0] if "-" in parent_id else parent_id
+                
+                # Also check for gene-level ID
+                gene_id_from_gene = attrs.get("gene_id", "")
+                if gene_id_from_gene:
+                    gene_id = gene_id_from_gene
+                
+                # Use transcript ID as key (most specific)
+                transcript_id = parent if parent else gene_id
+                
+                if transcript_id:
+                    if transcript_id not in cds_features:
+                        cds_features[transcript_id] = []
+                    
+                    cds_features[transcript_id].append({
+                        "chrom": chrom,
+                        "start": start,
+                        "end": end,
+                        "strand": strand,
+                        "phase": int(phase) if phase.isdigit() else 0,
+                        "gene_id": gene_id,
+                    })
+    except Exception as e:
+        logging.warning(f"Failed to parse CDS features from GFF file {gff_path}: {e}")
+        return {}
+    
+    # Sort CDS features by start position for each transcript
+    for transcript_id in cds_features:
+        cds_features[transcript_id].sort(key=lambda x: x["start"])
+    
+    return cds_features
+
+
+# Standard genetic code
+GENETIC_CODE = {
+    "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
+    "TCT": "S", "TCC": "S", "TCA": "S", "TCG": "S",
+    "TAT": "Y", "TAC": "Y", "TAA": "*", "TAG": "*",
+    "TGT": "C", "TGC": "C", "TGA": "*", "TGG": "W",
+    "CTT": "L", "CTC": "L", "CTA": "L", "CTG": "L",
+    "CCT": "P", "CCC": "P", "CCA": "P", "CCG": "P",
+    "CAT": "H", "CAC": "H", "CAA": "Q", "CAG": "Q",
+    "CGT": "R", "CGC": "R", "CGA": "R", "CGG": "R",
+    "ATT": "I", "ATC": "I", "ATA": "I", "ATG": "M",
+    "ACT": "T", "ACC": "T", "ACA": "T", "ACG": "T",
+    "AAT": "N", "AAC": "N", "AAA": "K", "AAG": "K",
+    "AGT": "S", "AGC": "S", "AGA": "R", "AGG": "R",
+    "GTT": "V", "GTC": "V", "GTA": "V", "GTG": "V",
+    "GCT": "A", "GCC": "A", "GCA": "A", "GCG": "A",
+    "GAT": "D", "GAC": "D", "GAA": "E", "GAG": "E",
+    "GGT": "G", "GGC": "G", "GGA": "G", "GGG": "G",
+}
+
+# Amino acid three-letter to one-letter mapping
+AA_3_TO_1 = {
+    "Ala": "A", "Arg": "R", "Asn": "N", "Asp": "D", "Cys": "C",
+    "Gln": "Q", "Glu": "E", "Gly": "G", "His": "H", "Ile": "I",
+    "Leu": "L", "Lys": "K", "Met": "M", "Phe": "F", "Pro": "P",
+    "Ser": "S", "Thr": "T", "Trp": "W", "Tyr": "Y", "Val": "V",
+    "Ter": "*", "Stop": "*",
+}
+
+
+def get_reference_sequence(reference: Dict[str, Path], chrom: str, start: int, end: int) -> str:
+    """Extract reference sequence for a given region."""
+    try:
+        from Bio import SeqIO
+        
+        # Load reference FASTA
+        with open(reference["fasta"]) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                if record.id == chrom or chrom in record.id or record.id in chrom:
+                    # Extract sequence (1-based coordinates in VCF/GFF)
+                    seq = str(record.seq[start - 1:end]).upper()
+                    return seq
+    except ImportError:
+        # Fallback: use samtools faidx
+        try:
+            result = micromamba_run(
+                ["samtools", "faidx", str(reference["fasta"]), f"{chrom}:{start}-{end}"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                lines = result.stdout.strip().split("\n")
+                if len(lines) > 1:
+                    # Skip header line, join sequence lines
+                    seq = "".join(lines[1:]).upper()
+                    return seq
+        except Exception:
+            pass
+    
+    return ""
+
+
+def calculate_codon_position(variant_pos: int, cds_start: int, cds_end: int, strand: str, phase: int = 0) -> Optional[int]:
+    """Calculate which codon (1-based) a variant position falls in within a CDS."""
+    if not (cds_start <= variant_pos <= cds_end):
+        return None
+    
+    if strand == "+":
+        # Forward strand: position is relative to CDS start
+        cds_pos = variant_pos - cds_start + 1  # 1-based position in CDS
+    else:
+        # Reverse strand: position is relative to CDS end (reverse complement)
+        cds_pos = cds_end - variant_pos + 1  # 1-based position in CDS
+    
+    # Account for phase offset
+    cds_pos_with_phase = cds_pos - phase
+    
+    # Calculate codon number (1-based)
+    codon_pos = (cds_pos_with_phase - 1) // 3 + 1
+    
+    return codon_pos
+
+
+def translate_codon(codon: str) -> str:
+    """Translate a DNA codon to amino acid (single letter)."""
+    codon_upper = codon.upper()
+    if len(codon_upper) != 3:
+        return "?"
+    return GENETIC_CODE.get(codon_upper, "?")
+
+
+def calculate_consequence(
+    chrom: str,
+    pos: int,
+    ref: str,
+    alt: str,
+    reference: Dict[str, Path],
+    cds_features: Dict[str, List[Dict[str, any]]],
+    gene_annotations: Dict[Tuple[str, int, int], Dict[str, str]],
+) -> Dict[str, str]:
+    """
+    Calculate variant consequence for a given variant.
+    Returns a dictionary with consequence information.
+    """
+    consequence_info = {
+        "consequence": "intergenic",
+        "amino_acid_change": "",
+        "codon_position": "",
+        "protein_position": "",
+    }
+    
+    # Check if variant overlaps with any gene/CDS
+    variant_overlaps_cds = False
+    overlapping_cds = None
+    gene_id = ""
+    
+    # First check gene annotations for overlap
+    for (gff_chrom, start, end), info in gene_annotations.items():
+        if gff_chrom == chrom and start <= pos <= end:
+            variant_overlaps_cds = True
+            gene_id = info.get("gene_id", "")
+            break
+    
+    # Check CDS features for precise overlap
+    for transcript_id, cds_list in cds_features.items():
+        for cds in cds_list:
+            if cds["chrom"] == chrom and cds["start"] <= pos <= cds["end"]:
+                variant_overlaps_cds = True
+                overlapping_cds = cds
+                gene_id = cds.get("gene_id", transcript_id)
+                break
+        if overlapping_cds:
+            break
+    
+    if not variant_overlaps_cds or not overlapping_cds:
+        # Variant is intergenic or in intron/UTR
+        return consequence_info
+    
+    # Variant is in CDS - calculate consequence
+    cds_start = overlapping_cds["start"]
+    cds_end = overlapping_cds["end"]
+    strand = overlapping_cds["strand"]
+    phase = overlapping_cds.get("phase", 0)
+    
+    # Calculate codon position
+    codon_pos = calculate_codon_position(pos, cds_start, cds_end, strand, phase)
+    
+    if codon_pos is None:
+        return consequence_info
+    
+    # Determine consequence type
+    ref_len = len(ref)
+    alt_len = len(alt)
+    
+    if ref_len == alt_len == 1:
+        # SNP
+        # Get reference codon sequence
+        # Calculate which position in CDS the variant is at
+        if strand == "+":
+            # Forward strand: position in CDS (1-based) = variant_pos - cds_start + 1
+            cds_pos = pos - cds_start + 1  # 1-based position in CDS
+        else:
+            # Reverse strand: position in CDS (1-based) = cds_end - variant_pos + 1
+            cds_pos = cds_end - pos + 1  # 1-based position in CDS
+        
+        # Account for phase offset
+        cds_pos_with_phase = cds_pos - phase
+        
+        # Calculate codon boundaries (1-based)
+        codon_start_cds = ((codon_pos - 1) * 3) + 1  # Start of codon in CDS coordinates
+        codon_end_cds = codon_start_cds + 2  # End of codon in CDS coordinates
+        
+        # Convert CDS coordinates to genomic coordinates
+        if strand == "+":
+            codon_genomic_start = cds_start + codon_start_cds - 1  # 1-based to 0-based
+            codon_genomic_end = cds_start + codon_end_cds - 1
+        else:
+            # Reverse strand: reverse the coordinates
+            codon_genomic_end = cds_end - codon_start_cds + 1
+            codon_genomic_start = cds_end - codon_end_cds + 1
+        
+        # Get reference codon sequence
+        ref_codon_raw = get_reference_sequence(reference, chrom, codon_genomic_start, codon_genomic_end)
+        if not ref_codon_raw or len(ref_codon_raw) != 3:
+            consequence_info["consequence"] = "coding_sequence_variant"
+            consequence_info["codon_position"] = str(codon_pos)
+            return consequence_info
+        
+        # For reverse strand, reverse complement the codon (get reference sequence is always forward)
+        complement = {"A": "T", "T": "A", "G": "C", "C": "G", "N": "N"}
+        if strand == "-":
+            # Reverse complement: reverse the sequence and complement each base
+            ref_codon = "".join(complement.get(b, "N") for b in reversed(ref_codon_raw))
+            # For alt, we need to complement it too
+            alt_comp = complement.get(alt, alt)
+        else:
+            ref_codon = ref_codon_raw
+            alt_comp = alt
+        
+        # Calculate position within codon (0-based)
+        pos_in_cds = cds_pos_with_phase  # Position in CDS (accounting for phase)
+        pos_in_codon = (pos_in_cds - 1) % 3  # 0-based position within codon (0, 1, or 2)
+        
+        # Create alt codon
+        alt_codon = ref_codon[:pos_in_codon] + alt_comp + ref_codon[pos_in_codon + 1:]
+        
+        ref_aa = translate_codon(ref_codon)
+        alt_aa = translate_codon(alt_codon)
+        
+        # Convert single-letter to three-letter amino acid codes for output
+        aa_1_to_3 = {
+            "A": "Ala", "R": "Arg", "N": "Asn", "D": "Asp", "C": "Cys",
+            "Q": "Gln", "E": "Glu", "G": "Gly", "H": "His", "I": "Ile",
+            "L": "Leu", "K": "Lys", "M": "Met", "F": "Phe", "P": "Pro",
+            "S": "Ser", "T": "Thr", "W": "Trp", "Y": "Tyr", "V": "Val",
+            "*": "Ter", "?": "?",
+        }
+        
+        ref_aa_3 = aa_1_to_3.get(ref_aa, ref_aa)
+        alt_aa_3 = aa_1_to_3.get(alt_aa, alt_aa)
+        protein_pos = codon_pos
+        
+        if ref_aa == alt_aa:
+            consequence_info["consequence"] = "synonymous_variant"
+        elif alt_aa == "*":
+            consequence_info["consequence"] = "stop_gained"
+            consequence_info["amino_acid_change"] = f"p.{ref_aa_3}{protein_pos}Ter"
+        elif ref_aa == "*":
+            consequence_info["consequence"] = "stop_lost"
+            consequence_info["amino_acid_change"] = f"p.Ter{protein_pos}{alt_aa_3}"
+        else:
+            consequence_info["consequence"] = "missense_variant"
+            consequence_info["amino_acid_change"] = f"p.{ref_aa_3}{protein_pos}{alt_aa_3}"
+            consequence_info["protein_position"] = str(protein_pos)
+        
+        consequence_info["codon_position"] = str(codon_pos)
+    
+    elif ref_len > alt_len:
+        # Deletion
+        del_len = ref_len - alt_len
+        if del_len % 3 == 0:
+            consequence_info["consequence"] = "inframe_deletion"
+        else:
+            consequence_info["consequence"] = "frameshift_variant"
+            consequence_info["amino_acid_change"] = f"p.{codon_pos}fs"
+    
+    elif alt_len > ref_len:
+        # Insertion
+        ins_len = alt_len - ref_len
+        if ins_len % 3 == 0:
+            consequence_info["consequence"] = "inframe_insertion"
+        else:
+            consequence_info["consequence"] = "frameshift_variant"
+            consequence_info["amino_acid_change"] = f"p.{codon_pos}fs"
+    
+    else:
+        # Complex variant
+        consequence_info["consequence"] = "coding_sequence_variant"
+    
+    if not consequence_info["amino_acid_change"] and codon_pos:
+        consequence_info["codon_position"] = str(codon_pos)
+    
+    return consequence_info
+
+
 def build_annotation_tsv(
     gff_path: Path,
     output_tsv: Path,
@@ -647,7 +991,193 @@ def annotate_vcf(
     reference: Dict[str, Path],
 ) -> bool:
     """
-    Annotate VCF file with gene information using bcftools annotate.
+    Annotate VCF file with gene information and consequences using bcftools annotate.
+    Adds consequences (missense, frameshift, etc.) calculated from GFF and reference.
+    Returns True if successful, False otherwise.
+    """
+    import tempfile
+    
+    try:
+        if not annotation_bgz.exists():
+            logging.warning(f"Annotation file not found: {annotation_bgz}")
+            return False
+        
+        annotated_vcf = vcf_path.with_suffix(".annotated.vcf.gz")
+        
+        # Create temporary header file for INFO field definitions
+        header_lines = [
+            "##INFO=<ID=GENE_ID,Number=1,Type=String,Description=\"Gene ID\">",
+            "##INFO=<ID=GENE_NAME,Number=1,Type=String,Description=\"Gene name\">",
+            "##INFO=<ID=FEATURE_TYPE,Number=1,Type=String,Description=\"Feature type (gene/CDS/mRNA)\">",
+            "##INFO=<ID=PRODUCT,Number=1,Type=String,Description=\"Gene product/description\">",
+            "##INFO=<ID=CONSEQUENCE,Number=1,Type=String,Description=\"Variant consequence (missense_variant, frameshift_variant, synonymous_variant, etc.)\">",
+            "##INFO=<ID=AMINO_ACID_CHANGE,Number=1,Type=String,Description=\"Amino acid change (e.g., p.Arg123Lys)\">",
+            "##INFO=<ID=CODON_POSITION,Number=1,Type=Integer,Description=\"Codon position in CDS\">",
+            "##INFO=<ID=PROTEIN_POSITION,Number=1,Type=Integer,Description=\"Protein position\">",
+        ]
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as header_file:
+            header_file.write("\n".join(header_lines) + "\n")
+            header_path = Path(header_file.name)
+        
+        try:
+            # First: annotate with gene information using bcftools
+            result = micromamba_run(
+                [
+                    "bcftools",
+                    "annotate",
+                    "-a",
+                    str(annotation_bgz),
+                    "-c",
+                    "CHROM,POS,GENE_ID,GENE_NAME,FEATURE_TYPE,PRODUCT",
+                    "-h",
+                    str(header_path),
+                    "-o",
+                    str(annotated_vcf),
+                    str(vcf_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            
+            if result.returncode != 0:
+                error_msg = result.stderr or result.stdout or "unknown error"
+                logging.warning(f"bcftools annotate failed: {error_msg}")
+                return False
+            
+            # Second: add consequences by parsing VCF and calculating from GFF
+            # Try to find GFF file from reference registry
+            gff_path = None
+            for ref_key in REFERENCE_REGISTRY:
+                ref_metadata = REFERENCE_REGISTRY[ref_key]
+                if "local_gff" in ref_metadata:
+                    gff_candidate = ref_metadata["local_gff"]
+                    if gff_candidate:
+                        gff_candidate_path = Path(gff_candidate)
+                        if gff_candidate_path.exists():
+                            gff_path = gff_candidate_path
+                            break
+            
+            if gff_path and gff_path.exists():
+                logging.info("Calculating variant consequences from GFF...")
+                add_consequences_to_vcf(annotated_vcf, reference, gff_path)
+            else:
+                logging.debug("GFF file not found - skipping consequence calculation")
+            
+            # Replace original VCF with annotated version
+            annotated_vcf.replace(vcf_path)
+            
+            # Re-index
+            micromamba_run(["bcftools", "index", str(vcf_path)], check=False)
+            
+            header_path.unlink()
+            return True
+        except Exception as e:
+            logging.warning(f"Failed to annotate VCF: {e}")
+            if header_path.exists():
+                header_path.unlink()
+            return False
+    except Exception as e:
+        logging.warning(f"VCF annotation failed: {e}")
+        return False
+
+
+def add_consequences_to_vcf(
+    vcf_path: Path,
+    reference: Dict[str, Path],
+    gff_path: Path,
+) -> None:
+    """
+    Add consequence annotations to VCF file by parsing variants and calculating consequences.
+    Updates INFO fields: CONSEQUENCE, AMINO_ACID_CHANGE, CODON_POSITION, PROTEIN_POSITION
+    """
+    import tempfile
+    import gzip
+    
+    try:
+        # Parse CDS features and gene annotations
+        cds_features = parse_gff_cds_features(gff_path)
+        gene_annotations = parse_gff_annotations(gff_path)
+        
+        if not cds_features:
+            logging.debug("No CDS features found for consequence calculation")
+            return
+        
+        # Read VCF file
+        open_func = gzip.open if str(vcf_path).endswith(".gz") else open
+        mode = "rt" if open_func == open else "rt"
+        
+        # Create temporary output VCF
+        temp_vcf = vcf_path.with_suffix(".temp.vcf.gz")
+        
+        with open_func(vcf_path, mode) as vcf_in:
+            with gzip.open(temp_vcf, "wt") as vcf_out:
+                for line in vcf_in:
+                    if line.startswith("##"):
+                        # Header line - pass through
+                        vcf_out.write(line)
+                    elif line.startswith("#CHROM"):
+                        # Column header - pass through
+                        vcf_out.write(line)
+                    else:
+                        # Variant line - calculate and add consequences
+                        fields = line.strip().split("\t")
+                        if len(fields) < 5:
+                            vcf_out.write(line)
+                            continue
+                        
+                        chrom = fields[0]
+                        pos_str = fields[1]
+                        ref = fields[3]
+                        alt = fields[4]
+                        info = fields[7] if len(fields) > 7 else "."
+                        
+                        try:
+                            pos = int(pos_str)
+                        except ValueError:
+                            vcf_out.write(line)
+                            continue
+                        
+                        # Calculate consequence
+                        consequence_info = calculate_consequence(
+                            chrom, pos, ref, alt, reference, cds_features, gene_annotations
+                        )
+                        
+                        # Add consequence fields to INFO
+                        if consequence_info["consequence"] and consequence_info["consequence"] != "intergenic":
+                            info_fields = info.split(";")
+                            
+                            # Remove existing consequence fields if present
+                            info_fields = [f for f in info_fields if not f.startswith(("CONSEQUENCE=", "AMINO_ACID_CHANGE=", "CODON_POSITION=", "PROTEIN_POSITION="))]
+                            
+                            # Add new consequence fields
+                            info_fields.append(f"CONSEQUENCE={consequence_info['consequence']}")
+                            if consequence_info["amino_acid_change"]:
+                                info_fields.append(f"AMINO_ACID_CHANGE={consequence_info['amino_acid_change']}")
+                            if consequence_info["codon_position"]:
+                                info_fields.append(f"CODON_POSITION={consequence_info['codon_position']}")
+                            if consequence_info["protein_position"]:
+                                info_fields.append(f"PROTEIN_POSITION={consequence_info['protein_position']}")
+                            
+                            fields[7] = ";".join(info_fields)
+                        
+                        vcf_out.write("\t".join(fields) + "\n")
+        
+        # Replace original with annotated version
+        temp_vcf.replace(vcf_path)
+        
+    except Exception as e:
+        logging.warning(f"Failed to add consequences to VCF: {e}")
+
+
+def annotate_vcf_basic(
+    vcf_path: Path,
+    annotation_bgz: Path,
+    reference: Dict[str, Path],
+) -> bool:
+    """
+    Basic VCF annotation with gene information only (no consequences).
     Returns True if successful, False otherwise.
     """
     import tempfile
@@ -814,8 +1344,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.bioproject:
         logging.info(f"Processing BioProject {args.bioproject}...")
         try:
-            # Query BioProject and generate metadata table with study IDs
-            study_ids, metadata_file = download_and_convert_bioproject(
+            # Query BioProject and generate/update metadata table with study IDs
+            # Returns study IDs, metadata file, and set of already processed run IDs
+            study_ids, metadata_file, processed_runs = download_and_convert_bioproject(
                 bioproject_id=args.bioproject,
                 output_dir=output_dir,
                 threads=threads,
@@ -826,8 +1357,9 @@ def main(argv: list[str] | None = None) -> int:
                 logging.error(f"No study IDs found for BioProject {args.bioproject}")
                 return 1
             
-            logging.info(f"Metadata table saved to {metadata_file}")
+            logging.info(f"Metadata table: {metadata_file}")
             logging.info(f"Processing {len(study_ids)} study/studies sequentially...")
+            logging.info(f"Skipping {len(processed_runs)} already processed run(s)")
             
             # Process each study sequentially - query runs on-demand
             for study_id in study_ids:
@@ -840,10 +1372,20 @@ def main(argv: list[str] | None = None) -> int:
                     logging.warning(f"No runs found for study {study_id}, skipping...")
                     continue
                 
-                logging.info(f"Found {len(run_ids)} run(s) in study {study_id}")
+                # Filter out already processed runs
+                unprocessed_runs = [r for r in run_ids if r not in processed_runs]
                 
-                # Process each SRA run from this study
-                for run_id in run_ids:
+                if not unprocessed_runs:
+                    logging.info(f"All {len(run_ids)} run(s) from study {study_id} already processed, skipping...")
+                    continue
+                
+                if len(unprocessed_runs) < len(run_ids):
+                    logging.info(f"Study {study_id}: {len(unprocessed_runs)} unprocessed, {len(run_ids) - len(unprocessed_runs)} already processed")
+                
+                logging.info(f"Found {len(unprocessed_runs)} unprocessed run(s) in study {study_id}")
+                
+                # Process each unprocessed SRA run from this study
+                for run_id in unprocessed_runs:
                     logging.info(f"Processing SRA run {run_id}...")
                     
                     # Create output subfolder for this SRA run
@@ -908,10 +1450,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         # Standard processing of local FASTQ files
         input_path = Path(args.input).expanduser().resolve()
-        fastqs = discover_fastqs(input_path)
-        samples = group_samples(fastqs)
+    fastqs = discover_fastqs(input_path)
+    samples = group_samples(fastqs)
 
-        for sample in samples:
+    for sample in samples:
             align_sample(
                 sample,
                 reference,
