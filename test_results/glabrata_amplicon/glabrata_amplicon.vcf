@@ -1,0 +1,50 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##bcftoolsVersion=1.22+htslib-1.22.1
+##bcftoolsCommand=mpileup -Ob -f /Users/arielaptekmann/.quickvar/reference/c_glabrata_cbs138.fna -o /Users/arielaptekmann/Desktop/CDI/Shor/QuickVar/test_results/glabrata_amplicon/glabrata_amplicon.bcf /Users/arielaptekmann/Desktop/CDI/Shor/QuickVar/test_results/glabrata_amplicon/glabrata_amplicon.sorted.bam
+##reference=file:///Users/arielaptekmann/.quickvar/reference/c_glabrata_cbs138.fna
+##contig=<ID=ChrA_C_glabrata_CBS138,length=527800>
+##contig=<ID=ChrB_C_glabrata_CBS138,length=512655>
+##contig=<ID=ChrC_C_glabrata_CBS138,length=594526>
+##contig=<ID=ChrD_C_glabrata_CBS138,length=667900>
+##contig=<ID=ChrE_C_glabrata_CBS138,length=707423>
+##contig=<ID=ChrF_C_glabrata_CBS138,length=957515>
+##contig=<ID=ChrG_C_glabrata_CBS138,length=1010292>
+##contig=<ID=ChrH_C_glabrata_CBS138,length=1057388>
+##contig=<ID=ChrI_C_glabrata_CBS138,length=1142525>
+##contig=<ID=ChrJ_C_glabrata_CBS138,length=1247563>
+##contig=<ID=ChrK_C_glabrata_CBS138,length=1307090>
+##contig=<ID=ChrL_C_glabrata_CBS138,length=1528264>
+##contig=<ID=ChrM_C_glabrata_CBS138,length=1465272>
+##contig=<ID=mito_C_glabrata_CBS138,length=20063>
+##ALT=<ID=*,Description="Represents allele(s) other than observed.">
+##INFO=<ID=INDEL,Number=0,Type=Flag,Description="Indicates that the variant is an INDEL.">
+##INFO=<ID=IDV,Number=1,Type=Integer,Description="Maximum number of raw reads supporting an indel">
+##INFO=<ID=IMF,Number=1,Type=Float,Description="Maximum fraction of raw reads supporting an indel">
+##INFO=<ID=DP,Number=1,Type=Integer,Description="Raw read depth">
+##INFO=<ID=VDB,Number=1,Type=Float,Description="Variant Distance Bias for filtering splice-site artefacts in RNA-seq data (bigger is better)",Version="3">
+##INFO=<ID=RPBZ,Number=1,Type=Float,Description="Mann-Whitney U-z test of Read Position Bias (closer to 0 is better)">
+##INFO=<ID=MQBZ,Number=1,Type=Float,Description="Mann-Whitney U-z test of Mapping Quality Bias (closer to 0 is better)">
+##INFO=<ID=BQBZ,Number=1,Type=Float,Description="Mann-Whitney U-z test of Base Quality Bias (closer to 0 is better)">
+##INFO=<ID=MQSBZ,Number=1,Type=Float,Description="Mann-Whitney U-z test of Mapping Quality vs Strand Bias (closer to 0 is better)">
+##INFO=<ID=SCBZ,Number=1,Type=Float,Description="Mann-Whitney U-z test of Soft-Clip Length Bias (closer to 0 is better)">
+##INFO=<ID=SGB,Number=1,Type=Float,Description="Segregation based metric, http://samtools.github.io/bcftools/rd-SegBias.pdf">
+##INFO=<ID=MQ0F,Number=1,Type=Float,Description="Fraction of MQ0 reads (smaller is better)">
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description="List of Phred-scaled genotype likelihoods">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths (high-quality bases)">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count in genotypes for each ALT allele, in the same order as listed">
+##INFO=<ID=AN,Number=1,Type=Integer,Description="Total number of alleles in called genotypes">
+##INFO=<ID=DP4,Number=4,Type=Integer,Description="Number of high-quality ref-forward , ref-reverse, alt-forward and alt-reverse bases">
+##INFO=<ID=MQ,Number=1,Type=Integer,Description="Average mapping quality">
+##bcftools_callVersion=1.22+htslib-1.22.1
+##bcftools_callCommand=call -mv -Oz --ploidy 1 -o /Users/arielaptekmann/Desktop/CDI/Shor/QuickVar/test_results/glabrata_amplicon/glabrata_amplicon.vcf.gz /Users/arielaptekmann/Desktop/CDI/Shor/QuickVar/test_results/glabrata_amplicon/glabrata_amplicon.bcf; Date=Thu Nov 20 10:37:36 2025
+##INFO=<ID=GENE_ID,Number=1,Type=String,Description="Gene ID">
+##INFO=<ID=GENE_NAME,Number=1,Type=String,Description="Gene name">
+##INFO=<ID=FEATURE_TYPE,Number=1,Type=String,Description="Feature type (gene/CDS/mRNA)">
+##INFO=<ID=PRODUCT,Number=1,Type=String,Description="Gene product/description">
+##bcftools_annotateVersion=1.22+htslib-1.22.1
+##bcftools_annotateCommand=annotate -a /Users/arielaptekmann/.quickvar/reference/c_glabrata_annotations.tsv.bgz -c CHROM,POS,GENE_ID,GENE_NAME,FEATURE_TYPE,PRODUCT -h /var/folders/3m/qcmffzz50yd0mfrkhhgkv1nc0000gn/T/tmpdqq_0l2l.txt -o /Users/arielaptekmann/Desktop/CDI/Shor/QuickVar/test_results/glabrata_amplicon/glabrata_amplicon.vcf.annotated.vcf.gz /Users/arielaptekmann/Desktop/CDI/Shor/QuickVar/test_results/glabrata_amplicon/glabrata_amplicon.vcf.gz; Date=Thu Nov 20 10:37:44 2025
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	/Users/arielaptekmann/Desktop/CDI/Shor/QuickVar/test_results/glabrata_amplicon/glabrata_amplicon.sorted.bam
+ChrA_C_glabrata_CBS138	50061	.	T	C	184.416	.	DP=20;VDB=6.17168e-13;SGB=-0.692067;MQ0F=0;AC=1;AN=1;DP4=0,0,20,0;MQ=60;GENE_ID=CAGL0A00363g;GENE_NAME=CAGL0A00363g;FEATURE_TYPE=gene;PRODUCT=Ortholog%28s%29%20have%203-isopropylmalate%20dehydratase%20activity%2C%20role%20in%20leucine%20biosynthetic%20process%20and%20cytosol%20localization	GT:PL:AD	1:214,0:0,20
+ChrA_C_glabrata_CBS138	50181	.	C	T	20.6268	.	DP=20;VDB=2.26006e-08;SGB=-0.683931;RPBZ=0;MQBZ=0;BQBZ=0;SCBZ=0;MQ0F=0;AC=1;AN=1;DP4=7,0,13,0;MQ=60;GENE_ID=CAGL0A00363g;GENE_NAME=CAGL0A00363g;FEATURE_TYPE=gene;PRODUCT=Ortholog%28s%29%20have%203-isopropylmalate%20dehydratase%20activity%2C%20role%20in%20leucine%20biosynthetic%20process%20and%20cytosol%20localization	GT:PL:AD	1:176,128:7,13

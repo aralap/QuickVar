@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import logging
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import os
 
 from .install import ensure_environment, micromamba_run
 from .reference import ensure_reference
 from .settings import REFERENCE_REGISTRY
+from .sra import download_and_convert_bioproject
 
 FASTQ_SUFFIXES = (".fastq", ".fq", ".fastq.gz", ".fq.gz")
 DEFAULT_OUTPUT_NAME = "Results"
@@ -116,6 +118,8 @@ def align_sample(
     ploidy: int,
     amplicon: bool,
     deduplicate: bool,
+    annotate: bool,
+    reference_key: str,
 ) -> None:
     logging.info("Processing sample %s", sample.name)
     sample_dir = output_dir / sample.name
@@ -195,6 +199,17 @@ def align_sample(
     micromamba_run(bcftools_call)
 
     micromamba_run(["bcftools", "index", str(vcf_path)])
+
+    # Optional VCF annotation
+    if annotate:
+        try:
+            annotation_bgz = ensure_annotations(reference_key, reference)
+            if annotation_bgz:
+                annotate_vcf(vcf_path, annotation_bgz, reference)
+            else:
+                logging.warning("VCF annotation skipped: annotation file not available")
+        except Exception as e:
+            logging.warning(f"VCF annotation failed (continuing without annotation): {e}")
 
     if not keep_intermediate:
         if sam_path.exists():
@@ -425,9 +440,328 @@ def estimate_neighbor_depth(
     return sum(values) / len(values)
 
 
+def parse_gff_attributes(attr_string: str) -> Dict[str, str]:
+    """Parse GFF attribute string into a dictionary."""
+    attrs: Dict[str, str] = {}
+    for pair in attr_string.split(";"):
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            attrs[key.strip()] = value.strip()
+    return attrs
+
+
+def parse_gff_annotations(gff_path: Path) -> Dict[Tuple[str, int, int], Dict[str, str]]:
+    """
+    Parse GFF file and extract gene annotations.
+    Returns a dictionary mapping (chrom, start, end) -> {gene_id, gene_name, feature_type}.
+    """
+    annotations: Dict[Tuple[str, int, int], Dict[str, str]] = {}
+    
+    if not gff_path.exists():
+        return annotations
+    
+    open_func = gzip.open if gff_path.suffix == ".gz" or str(gff_path).endswith(".gz") else open
+    mode = "rt" if open_func == open else "rt"
+    
+    try:
+        with open_func(gff_path, mode) as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                
+                fields = line.split("\t")
+                if len(fields) < 9:
+                    continue
+                
+                chrom = fields[0]
+                feature_type = fields[2]
+                try:
+                    start = int(fields[3])
+                    end = int(fields[4])
+                except ValueError:
+                    continue
+                
+                # Focus on gene and CDS features
+                if feature_type not in ("gene", "CDS", "mRNA"):
+                    continue
+                
+                attrs = parse_gff_attributes(fields[8])
+                
+                # Extract gene ID and name
+                gene_id = attrs.get("ID", attrs.get("gene_id", attrs.get("locus_tag", "")))
+                gene_name = attrs.get("Name", attrs.get("gene", attrs.get("gene_name", "")))
+                product = attrs.get("product", attrs.get("Note", ""))
+                
+                # Store annotation for this region
+                key = (chrom, start, end)
+                if key not in annotations or feature_type == "gene":
+                    annotations[key] = {
+                        "gene_id": gene_id,
+                        "gene_name": gene_name,
+                        "feature_type": feature_type,
+                        "product": product,
+                    }
+    except Exception as e:
+        logging.warning(f"Failed to parse GFF file {gff_path}: {e}")
+        return {}
+    
+    return annotations
+
+
+def build_annotation_tsv(
+    gff_path: Path,
+    output_tsv: Path,
+    reference: Dict[str, Path],
+) -> bool:
+    """
+    Build a TSV annotation file from GFF for bcftools annotate.
+    Format: CHROM\tPOS\tGENE_ID\tGENE_NAME\tFEATURE_TYPE
+    Returns True if successful, False otherwise.
+    """
+    try:
+        annotations = parse_gff_annotations(gff_path)
+        if not annotations:
+            logging.warning("No annotations found in GFF file")
+            return False
+        
+        # Read reference FASTA to get chromosome names
+        chrom_names: set[str] = set()
+        fai_path = reference["fasta"].with_suffix(".fai")
+        if fai_path.exists():
+            with open(fai_path) as f:
+                for line in f:
+                    chrom_names.add(line.split("\t")[0])
+        
+        # Build position-based annotation lookup
+        position_annotations: Dict[Tuple[str, int], Dict[str, str]] = {}
+        for (chrom, start, end), info in annotations.items():
+            if chrom_names and chrom not in chrom_names:
+                # Try to match chromosome name variations
+                matched = False
+                for ref_chrom in chrom_names:
+                    if chrom in ref_chrom or ref_chrom in chrom:
+                        chrom = ref_chrom
+                        matched = True
+                        break
+                if not matched and chrom_names:
+                    continue
+            
+            # Store annotation for each position in the range
+            for pos in range(start, end + 1):
+                key = (chrom, pos)
+                # Prefer gene-level annotations over CDS/mRNA
+                if key not in position_annotations or info["feature_type"] == "gene":
+                    position_annotations[key] = info
+        
+        if not position_annotations:
+            logging.warning("No position annotations could be matched to reference chromosomes")
+            return False
+        
+        # Write TSV file
+        with open(output_tsv, "w") as f:
+            f.write("CHROM\tPOS\tGENE_ID\tGENE_NAME\tFEATURE_TYPE\tPRODUCT\n")
+            for (chrom, pos), info in sorted(position_annotations.items()):
+                f.write(
+                    f"{chrom}\t{pos}\t{info['gene_id']}\t{info['gene_name']}\t"
+                    f"{info['feature_type']}\t{info['product']}\n"
+                )
+        
+        logging.info(f"Built annotation TSV with {len(position_annotations)} positions")
+        return True
+    except Exception as e:
+        logging.warning(f"Failed to build annotation TSV: {e}")
+        return False
+
+
+def index_annotation_tsv(tsv_path: Path) -> bool:
+    """
+    Index annotation TSV with tabix for bcftools annotate.
+    Returns True if successful, False otherwise.
+    """
+    try:
+        # Sort the TSV file (required for tabix) - skip header
+        sorted_tsv = tsv_path.with_suffix(".sorted.tsv")
+        with open(tsv_path) as infile, open(sorted_tsv, "w") as outfile:
+            header = infile.readline()
+            outfile.write(header)
+            # Sort remaining lines
+            lines = sorted(infile, key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
+            outfile.writelines(lines)
+        
+        # Replace original with sorted
+        sorted_tsv.replace(tsv_path)
+        
+        # Compress with bgzip (part of htslib, should be available via bcftools)
+        # bgzip compresses in place and renames to .gz, so we'll rename to .bgz after
+        bgz_path = tsv_path.with_suffix(".tsv.bgz")
+        result = micromamba_run(
+            ["bgzip", str(tsv_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logging.warning(f"bgzip failed: {result.stderr or 'unknown error'}")
+            return False
+        
+        # bgzip creates .gz file, rename to .bgz for clarity
+        gz_path = tsv_path.with_suffix(".tsv.gz")
+        if gz_path.exists():
+            gz_path.rename(bgz_path)
+        elif not bgz_path.exists():
+            logging.warning("bgzip did not create expected output file")
+            return False
+        
+        # Index with tabix (part of htslib)
+        # For TSV format: -s 1 (sequence/chrom), -b 2 (start/pos), -e 2 (end/pos)
+        # Skip header with -S 1
+        result = micromamba_run(
+            ["tabix", "-S", "1", "-s", "1", "-b", "2", "-e", "2", str(bgz_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            error_msg = result.stderr or result.stdout or "unknown error"
+            logging.warning(f"tabix failed: {error_msg}")
+            # Don't delete the bgz file - it might be useful for debugging
+            return False
+        
+        # Remove uncompressed TSV (already compressed)
+        if tsv_path.exists():
+            tsv_path.unlink()
+        
+        logging.info(f"Indexed annotation file: {bgz_path}")
+        return True
+    except Exception as e:
+        import traceback
+        logging.warning(f"Failed to index annotation TSV: {e}")
+        logging.debug(f"Traceback: {traceback.format_exc()}")
+        return False
+
+
+def annotate_vcf(
+    vcf_path: Path,
+    annotation_bgz: Path,
+    reference: Dict[str, Path],
+) -> bool:
+    """
+    Annotate VCF file with gene information using bcftools annotate.
+    Returns True if successful, False otherwise.
+    """
+    import tempfile
+    
+    try:
+        if not annotation_bgz.exists():
+            logging.warning(f"Annotation file not found: {annotation_bgz}")
+            return False
+        
+        annotated_vcf = vcf_path.with_suffix(".annotated.vcf.gz")
+        
+        # Create temporary header file for INFO field definitions
+        header_lines = [
+            "##INFO=<ID=GENE_ID,Number=1,Type=String,Description=\"Gene ID\">",
+            "##INFO=<ID=GENE_NAME,Number=1,Type=String,Description=\"Gene name\">",
+            "##INFO=<ID=FEATURE_TYPE,Number=1,Type=String,Description=\"Feature type (gene/CDS/mRNA)\">",
+            "##INFO=<ID=PRODUCT,Number=1,Type=String,Description=\"Gene product/description\">",
+        ]
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as header_file:
+            header_file.write("\n".join(header_lines) + "\n")
+            header_path = Path(header_file.name)
+        
+        try:
+            result = micromamba_run(
+                [
+                    "bcftools",
+                    "annotate",
+                    "-a",
+                    str(annotation_bgz),
+                    "-c",
+                    "CHROM,POS,GENE_ID,GENE_NAME,FEATURE_TYPE,PRODUCT",
+                    "-h",
+                    str(header_path),
+                    "-o",
+                    str(annotated_vcf),
+                    str(vcf_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            
+            if result.returncode != 0:
+                error_msg = result.stderr or result.stdout or "unknown error"
+                logging.warning(f"bcftools annotate failed: {error_msg}")
+                return False
+            
+            # Replace original VCF with annotated version
+            annotated_vcf.replace(vcf_path)
+            
+            # Re-index
+            micromamba_run(["bcftools", "index", str(vcf_path)], check=False)
+            
+            logging.info(f"Successfully annotated VCF: {vcf_path}")
+            return True
+        finally:
+            # Clean up temporary header file
+            if header_path.exists():
+                header_path.unlink()
+    except Exception as e:
+        logging.warning(f"Failed to annotate VCF: {e}")
+        return False
+
+
+def ensure_annotations(
+    reference_key: str,
+    reference: Dict[str, Path],
+) -> Optional[Path]:
+    """
+    Ensure annotation files are available for the given reference.
+    Returns path to annotation BGZ file if successful, None otherwise.
+    """
+    if reference_key not in REFERENCE_REGISTRY:
+        return None
+    
+    metadata = REFERENCE_REGISTRY[reference_key]
+    gff_path = metadata.get("local_gff")
+    
+    if not gff_path or not gff_path.exists():
+        logging.debug(f"No GFF file available for reference {reference_key}")
+        return None
+    
+    # Check cache for existing annotation file
+    from .settings import REFERENCE_DIR
+    
+    annotation_bgz = REFERENCE_DIR / f"{reference_key}_annotations.tsv.bgz"
+    annotation_tsv = REFERENCE_DIR / f"{reference_key}_annotations.tsv"
+    
+    tbi_path = annotation_bgz.with_name(annotation_bgz.name + ".tbi")
+    if annotation_bgz.exists() and tbi_path.exists():
+        return annotation_bgz
+    
+    # Build annotation TSV
+    if not build_annotation_tsv(gff_path, annotation_tsv, reference):
+        return None
+    
+    # Index annotation TSV
+    if not index_annotation_tsv(annotation_tsv):
+        return None
+    
+    return annotation_bgz
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Align FASTQ reads and call variants")
-    parser.add_argument("--input", required=True, help="Path to FASTQ file or directory containing FASTQs")
+    parser.add_argument(
+        "--input",
+        help="Path to FASTQ file or directory containing FASTQs (required if --bioproject not used)",
+    )
+    parser.add_argument(
+        "--bioproject",
+        help="NCBI BioProject ID (e.g., PRJNA123456) to download and process SRA files",
+    )
     parser.add_argument("--output", default=DEFAULT_OUTPUT_NAME, help="Directory to write results (default: Results)")
     parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads (default: auto)")
     parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy for variant calling (default: haploid)")
@@ -439,6 +773,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--amplicon", action="store_true", help="Produce per-position mutation frequency table")
     parser.add_argument("--deduplicate", action="store_true", help="Remove PCR duplicates using samtools markdup")
+    parser.add_argument(
+        "--annotate",
+        action="store_true",
+        help="Annotate VCF with gene information from GFF (requires GFF file for reference)",
+    )
+    parser.add_argument(
+        "--skip-prefetch",
+        action="store_true",
+        help="Skip prefetch step when downloading SRA files (fasterq-dump will download if needed)",
+    )
     parser.add_argument("--keep-intermediate", action="store_true", help="Retain SAM and BCF intermediates")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--force-reference", action="store_true", help="Redownload and reindex reference genome")
@@ -449,7 +793,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     configure_logging(args.verbose)
 
-    input_path = Path(args.input).expanduser().resolve()
+    # Validate arguments
+    if not args.input and not args.bioproject:
+        logging.error("Either --input or --bioproject must be provided")
+        return 1
+    
+    if args.input and args.bioproject:
+        logging.error("Cannot use both --input and --bioproject. Use one or the other.")
+        return 1
+
     output_dir = Path(args.output).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -457,6 +809,31 @@ def main(argv: list[str] | None = None) -> int:
 
     ensure_environment()
     reference = ensure_reference(reference_key=args.reference, force=args.force_reference)
+
+    # Handle BioProject download
+    if args.bioproject:
+        logging.info(f"Downloading and converting SRA files from BioProject {args.bioproject}...")
+        try:
+            # Create temporary directory for downloaded FASTQ files
+            fastq_temp_dir = output_dir / "sra_downloads"
+            fastq_files = download_and_convert_bioproject(
+                bioproject_id=args.bioproject,
+                output_dir=fastq_temp_dir,
+                threads=threads,
+                skip_prefetch=args.skip_prefetch,
+            )
+            
+            if not fastq_files:
+                logging.error(f"No FASTQ files were generated from BioProject {args.bioproject}")
+                return 1
+            
+            # Use downloaded FASTQ files as input
+            input_path = fastq_temp_dir
+        except Exception as e:
+            logging.error(f"Failed to download/convert BioProject {args.bioproject}: {e}")
+            return 1
+    else:
+        input_path = Path(args.input).expanduser().resolve()
 
     fastqs = discover_fastqs(input_path)
     samples = group_samples(fastqs)
@@ -471,6 +848,8 @@ def main(argv: list[str] | None = None) -> int:
             args.ploidy,
             args.amplicon,
             args.deduplicate,
+            args.annotate,
+            args.reference,
         )
 
     logging.info("Completed processing %d sample(s)", len(samples))

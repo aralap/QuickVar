@@ -1,0 +1,3 @@
+chrom	window_start	window_end	pos	ref_base	alt_base	alt_count	total_depth	wt_count_in_10bp	frequency	estimated_frequency
+ChrA_C_glabrata_CBS138	50086	50096	50091	A	+AT	5	25	20	0.2000	0.2500
+ChrA_C_glabrata_CBS138	50113	50123	50118	C	-T	7	27	13	0.2593	0.2846

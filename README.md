@@ -7,11 +7,13 @@ QuickVar provides a cross-platform, one-command workflow to align *Candida glabr
 - Automatic download and indexing of the *Candida glabrata* CBS138 reference genome.
 - Supports *Candida glabrata* (default) and *Candida auris* references (switch via `--reference`).
 - Supports single-end and paired-end FASTQ files (optionally compressed with gzip).
+- **NEW:** Download and process SRA files directly from NCBI BioProjects using `--bioproject`.
 - Generates sorted BAM files with indexes and VCF outputs per sample.
 - Cross-platform support (macOS, Linux, Windows) with identical commands.
 - Variant calling defaults to haploid (`--ploidy 1`) but can be configured per run.
 - Amplicon mode (`--amplicon`) emits per-position mutation frequency summaries.
 - Optional PCR duplicate removal via `--deduplicate` (powered by `samtools markdup`).
+- **NEW:** VCF annotation with gene information from GFF files using `--annotate`.
 
 ## Prerequisites
 - Python 3.10 or newer.
@@ -49,15 +51,25 @@ This downloads Micromamba (if needed) and creates the `quickvar` environment con
    Windows drives are available inside WSL under `/mnt/<drive-letter>/...`, and you can open WSL paths from Explorer via `\\wsl$\Ubuntu\`.
 
 ### 2. Run the Pipeline
+
+#### Option A: Using Local FASTQ Files
 ```bash
 python -m quickvar.align --input /path/to/fastqs --output /path/to/results
 ```
 - `--input` can point to a single FASTQ file or a directory containing one or more FASTQ files.
 - When not provided, `--output` defaults to a `Results` directory in the current working directory.
 
+#### Option B: Download from NCBI BioProject
+```bash
+python -m quickvar.align --bioproject PRJNA123456 --output /path/to/results
+```
+- Downloads all SRA runs from the specified BioProject, converts them to FASTQ, and processes them.
+- Use `--skip-prefetch` to skip the prefetch step (faster, but less caching).
+
 Each sample results in:
 - `sample.sorted.bam` and `sample.sorted.bam.bai`
 - `sample.vcf.gz` and `sample.vcf.gz.tbi`
+- (Optional) Annotated VCF with gene information if `--annotate` is used
 
 ### Sample Detection
 - Paired-end files should include `_R1`/`_R2`, `.R1`/`.R2`, or `_1`/`_2` in their names.
@@ -92,12 +104,17 @@ The example below walks through a complete run using public test data.
    python -m quickvar.align \
      --input test_data/amplicon/glabrata_amplicon.fastq.gz \
      --output DemoResults \
-     --amplicon
+     --amplicon \
+     --annotate
    ```
-   Progress prints to the terminal. Results for each sample land inside `DemoResults/<sample>/`. Add `--deduplicate` if you want duplicate reads removed before variant calling. The `--amplicon` flag adds a per-position summary TSV in addition to the alignment/variant files.
+   Progress prints to the terminal. Results for each sample land inside `DemoResults/<sample>/`. 
+   - Add `--deduplicate` if you want duplicate reads removed before variant calling.
+   - The `--amplicon` flag adds a per-position summary TSV in addition to the alignment/variant files.
+   - The `--annotate` flag adds gene annotations to the VCF file (requires GFF file for the reference).
 
-4. **(Optional) Use your own FASTQs**  
-   Point `--input` at your FASTQ file or a directory containing multiple FASTQs. Paired-end files are paired automatically when they follow `_R1`/`_R2` (or similar) naming.
+4. **(Optional) Use your own FASTQs or download from NCBI**  
+   - **Local FASTQs:** Point `--input` at your FASTQ file or a directory containing multiple FASTQs. Paired-end files are paired automatically when they follow `_R1`/`_R2` (or similar) naming.
+   - **NCBI BioProject:** Use `--bioproject PRJNA123456` to automatically download and process all SRA runs from a BioProject. The pipeline will download SRA files, convert them to FASTQ, and process them automatically.
 
 5. **Inspect outputs**  
    ```bash
@@ -105,6 +122,10 @@ The example below walks through a complete run using public test data.
    samtools flagstat DemoResults/sample/sample.sorted.bam
    bcftools view DemoResults/sample/sample.vcf.gz | head
    column -t DemoResults/sample/sample_amplicon.tsv | head
+   ```
+   If `--annotate` was used, check the VCF INFO column for gene annotations:
+   ```bash
+   bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%INFO/GENE_ID\t%INFO/GENE_NAME\n' DemoResults/sample/sample.vcf.gz | head
    ```
 
 6. **Clean up (optional)**  
@@ -141,8 +162,53 @@ python -m quickvar.align \
   --input your_reads.fastq.gz \
   --output AurisResults \
   --reference c_auris \
-  --amplicon
+  --amplicon \
+  --annotate
 ```
+
+### Downloading and Processing SRA Files from NCBI BioProjects
+
+QuickVar can automatically download and process SRA files from NCBI BioProjects:
+
+```bash
+python -m quickvar.align \
+  --bioproject PRJNA123456 \
+  --output BioProjectResults \
+  --reference c_glabrata \
+  --amplicon \
+  --annotate
+```
+
+This will:
+1. Query the BioProject to find all associated SRA runs
+2. Download SRA files (cached in `~/.quickvar/sra/`)
+3. Convert SRA files to FASTQ format
+4. Process each sample through the alignment and variant calling pipeline
+
+**Options:**
+- `--skip-prefetch`: Skip the prefetch step (faster, but fasterq-dump will download if needed)
+- SRA files are cached, so re-running with the same BioProject will reuse cached files
+
+**Note:** Some SRA runs may require dbGaP authorization (controlled access). The pipeline will skip these with a warning and continue processing other runs.
+
+### VCF Annotation with Gene Information
+
+Add gene annotations to your VCF files using the bundled GFF files:
+
+```bash
+python -m quickvar.align \
+  --input your_reads.fastq.gz \
+  --output AnnotatedResults \
+  --annotate
+```
+
+The `--annotate` flag adds the following INFO fields to variants:
+- `GENE_ID`: Gene identifier from the GFF file
+- `GENE_NAME`: Gene name (if available)
+- `FEATURE_TYPE`: Type of feature (gene/CDS/mRNA)
+- `PRODUCT`: Gene product/description (if available)
+
+Annotation files are built once and cached in `~/.quickvar/reference/` for reuse. If annotation fails (e.g., no GFF file available), the pipeline continues with a warning and produces an unannotated VCF.
 
 ## Development
 - `pyproject.toml` configures QuickVar as a Python package with console entry points.

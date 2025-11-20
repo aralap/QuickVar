@@ -23,7 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument("--show-path", action="store_true", help="Print environment path")
 
     align_parser = subparsers.add_parser("align", help="Align FASTQ reads and call variants")
-    align_parser.add_argument("--input", required=True, help="Path to FASTQ file or directory")
+    align_parser.add_argument("--input", help="Path to FASTQ file or directory (required if --bioproject not used)")
+    align_parser.add_argument(
+        "--bioproject",
+        help="NCBI BioProject ID (e.g., PRJNA123456) to download and process SRA files",
+    )
     align_parser.add_argument("--output", default=align_module.DEFAULT_OUTPUT_NAME, help="Output directory")
     align_parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads")
     align_parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy (default: 1)")
@@ -35,6 +39,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     align_parser.add_argument("--amplicon", action="store_true", help="Generate per-position amplicon summary")
     align_parser.add_argument("--deduplicate", action="store_true", help="Remove PCR duplicates with samtools markdup")
+    align_parser.add_argument(
+        "--annotate",
+        action="store_true",
+        help="Annotate VCF with gene information from GFF (requires GFF file for reference)",
+    )
+    align_parser.add_argument(
+        "--skip-prefetch",
+        action="store_true",
+        help="Skip prefetch step when downloading SRA files (fasterq-dump will download if needed)",
+    )
     align_parser.add_argument("--keep-intermediate", action="store_true", help="Keep SAM and BCF files")
     align_parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     align_parser.add_argument("--force-reference", action="store_true", help="Redownload reference data")
@@ -64,8 +78,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "align":
         align_args = [
-            "--input",
-            args.input,
             "--output",
             args.output,
             "--threads",
@@ -73,10 +85,18 @@ def main(argv: list[str] | None = None) -> int:
             "--ploidy",
             str(args.ploidy),
         ]
+        if args.input:
+            align_args.extend(["--input", args.input])
+        if args.bioproject:
+            align_args.extend(["--bioproject", args.bioproject])
         if args.amplicon:
             align_args.append("--amplicon")
         if args.deduplicate:
             align_args.append("--deduplicate")
+        if args.annotate:
+            align_args.append("--annotate")
+        if args.skip_prefetch:
+            align_args.append("--skip-prefetch")
         align_args.extend(["--reference", args.reference])
         if args.keep_intermediate:
             align_args.append("--keep-intermediate")

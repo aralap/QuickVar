@@ -1,0 +1,6 @@
+chrom	pos	ref_base	alt_base	alt_count	depth	frequency	mutation	igv_depth	estimated_coverage	estimated_frequency
+ChrA_C_glabrata_CBS138	50061	T	C	20	20	1.0000	T>C	20	20.00	1.0000
+ChrA_C_glabrata_CBS138	50091	A	+AT	5	25	0.2000	A>+AT	20	20.00	0.2500
+ChrA_C_glabrata_CBS138	50118	C	-T	7	27	0.2593	C>-T	20	24.60	0.2846
+ChrA_C_glabrata_CBS138	50181	C	T	13	20	0.6500	C>T	20	20.00	0.6500
+ChrA_C_glabrata_CBS138	50182	A	T	7	20	0.3500	A>T	20	20.00	0.3500

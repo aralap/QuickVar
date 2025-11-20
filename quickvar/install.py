@@ -28,6 +28,7 @@ QUICKVAR_PACKAGES = [
     "minimap2>=2.24",
     "samtools>=1.19",
     "bcftools>=1.19",
+    "sra-tools>=3.0",
 ]
 
 

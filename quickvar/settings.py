@@ -19,6 +19,7 @@ REFERENCE_REGISTRY = {
         "fasta_name": "c_glabrata_cbs138.fna",
         "mmi_name": "c_glabrata_cbs138.mmi",
         "local_gz": LOCAL_REFERENCE_DIR / "C_glabrata_CBS138_current_chromosomes.fasta.gz",
+        "local_gff": LOCAL_REFERENCE_DIR / "C_glabrata_CBS138_current_features.gff",
     },
     "c_auris": {
         "url": (
@@ -28,5 +29,6 @@ REFERENCE_REGISTRY = {
         "fasta_name": "c_auris_b11221.fna",
         "mmi_name": "c_auris_b11221.mmi",
         "local_gz": LOCAL_REFERENCE_DIR / "GCF_002775015.1_Cand_auris_B11221_V1_genomic.fna.gz",
+        "local_gff": LOCAL_REFERENCE_DIR / "GCF_002775015.1_Cand_auris_B11221_V1_genomic.gff.gz",
     },
 }
