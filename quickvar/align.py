@@ -618,36 +618,72 @@ AA_3_TO_1 = {
 }
 
 
-def get_reference_sequence(reference: Dict[str, Path], chrom: str, start: int, end: int) -> str:
-    """Extract reference sequence for a given region."""
+_REFERENCE_SEQUENCE_CACHE: Dict[Path, Dict[str, str]] = {}
+
+
+def _load_reference_sequences(reference_fasta: Path) -> Dict[str, str]:
+    """
+    Load all reference chromosome sequences into memory once.
+    Returns a dict: chrom_id -> sequence (uppercased).
+    """
+    if reference_fasta in _REFERENCE_SEQUENCE_CACHE:
+        return _REFERENCE_SEQUENCE_CACHE[reference_fasta]
+
+    sequences: Dict[str, str] = {}
+    current_id: Optional[str] = None
+    chunks: List[str] = []
+
     try:
-        from Bio import SeqIO
-        
-        # Load reference FASTA
-        with open(reference["fasta"]) as handle:
-            for record in SeqIO.parse(handle, "fasta"):
-                if record.id == chrom or chrom in record.id or record.id in chrom:
-                    # Extract sequence (1-based coordinates in VCF/GFF)
-                    seq = str(record.seq[start - 1:end]).upper()
-                    return seq
-    except ImportError:
-        # Fallback: use samtools faidx
-        try:
-            result = micromamba_run(
-                ["samtools", "faidx", str(reference["fasta"]), f"{chrom}:{start}-{end}"],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                lines = result.stdout.strip().split("\n")
-                if len(lines) > 1:
-                    # Skip header line, join sequence lines
-                    seq = "".join(lines[1:]).upper()
-                    return seq
-        except Exception:
-            pass
-    
-    return ""
+        with open(reference_fasta, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line:
+                    continue
+                if line.startswith(">"):
+                    # Flush previous record
+                    if current_id is not None:
+                        sequences[current_id] = "".join(chunks).upper()
+                    header = line[1:].strip()
+                    current_id = header.split()[0]
+                    chunks = []
+                else:
+                    chunks.append(line.strip())
+            # Flush last record
+            if current_id is not None:
+                sequences[current_id] = "".join(chunks).upper()
+    except OSError as e:
+        logging.warning("Failed to load reference FASTA %s: %s", reference_fasta, e)
+        return {}
+
+    _REFERENCE_SEQUENCE_CACHE[reference_fasta] = sequences
+    return sequences
+
+
+def get_reference_sequence(reference: Dict[str, Path], chrom: str, start: int, end: int) -> str:
+    """
+    Extract reference sequence for a given region using an in-memory cache.
+    Coordinates are 1-based inclusive.
+    """
+    fasta_path = reference["fasta"]
+    sequences = _load_reference_sequences(fasta_path)
+    if not sequences:
+        return ""
+
+    # Try exact match, then relaxed matching on IDs
+    seq = sequences.get(chrom)
+    if seq is None:
+        for key in sequences:
+            if key == chrom or chrom in key or key in chrom:
+                seq = sequences[key]
+                break
+    if seq is None:
+        return ""
+
+    # Clamp coordinates to sequence bounds
+    start_idx = max(start - 1, 0)
+    end_idx = min(end, len(seq))
+    if start_idx >= end_idx:
+        return ""
+    return seq[start_idx:end_idx]
 
 
 def calculate_codon_position(variant_pos: int, cds_start: int, cds_end: int, strand: str, phase: int = 0) -> Optional[int]:
@@ -685,8 +721,8 @@ def calculate_consequence(
     ref: str,
     alt: str,
     reference: Dict[str, Path],
-    cds_features: Dict[str, List[Dict[str, any]]],
-    gene_annotations: Dict[Tuple[str, int, int], Dict[str, str]],
+    cds_index: Dict[str, List[Dict[str, object]]],
+    gene_index: Dict[str, List[Dict[str, object]]],
 ) -> Dict[str, str]:
     """
     Calculate variant consequence for a given variant.
@@ -699,30 +735,31 @@ def calculate_consequence(
         "protein_position": "",
     }
     
-    # Check if variant overlaps with any gene/CDS
-    variant_overlaps_cds = False
-    overlapping_cds = None
-    gene_id = ""
-    
-    # First check gene annotations for overlap
-    for (gff_chrom, start, end), info in gene_annotations.items():
-        if gff_chrom == chrom and start <= pos <= end:
-            variant_overlaps_cds = True
-            gene_id = info.get("gene_id", "")
-            break
-    
-    # Check CDS features for precise overlap
-    for transcript_id, cds_list in cds_features.items():
-        for cds in cds_list:
-            if cds["chrom"] == chrom and cds["start"] <= pos <= cds["end"]:
-                variant_overlaps_cds = True
+    # Check if variant overlaps with any CDS using indexed intervals
+    overlapping_cds: Optional[Dict[str, object]] = None
+
+    cds_list = cds_index.get(chrom, [])
+    if cds_list:
+        # Binary search by start coordinate
+        starts = [c["start"] for c in cds_list]  # type: ignore[index]
+        lo = 0
+        hi = len(starts)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if starts[mid] <= pos:
+                lo = mid + 1
+            else:
+                hi = mid
+        # Scan a small window backwards to find overlapping interval(s)
+        i = max(0, lo - 5)
+        while i < len(cds_list) and cds_list[i]["start"] <= pos:  # type: ignore[index]
+            cds = cds_list[i]
+            if cds["start"] <= pos <= cds["end"]:  # type: ignore[index]
                 overlapping_cds = cds
-                gene_id = cds.get("gene_id", transcript_id)
                 break
-        if overlapping_cds:
-            break
-    
-    if not variant_overlaps_cds or not overlapping_cds:
+            i += 1
+
+    if not overlapping_cds:
         # Variant is intergenic or in intron/UTR
         return consequence_info
     
@@ -1096,13 +1133,45 @@ def add_consequences_to_vcf(
     import gzip
     
     try:
-        # Parse CDS features and gene annotations
+        # Parse CDS features and gene annotations once
         cds_features = parse_gff_cds_features(gff_path)
         gene_annotations = parse_gff_annotations(gff_path)
         
         if not cds_features:
             logging.debug("No CDS features found for consequence calculation")
             return
+
+        # Build per-chromosome interval indexes for fast overlap queries
+        cds_index: Dict[str, List[Dict[str, object]]] = {}
+        for transcript_id, cds_list in cds_features.items():
+            for cds in cds_list:
+                chrom = cds["chrom"]  # type: ignore[index]
+                cds_entry = {
+                    "chrom": chrom,
+                    "start": cds["start"],  # type: ignore[index]
+                    "end": cds["end"],      # type: ignore[index]
+                    "strand": cds["strand"],  # type: ignore[index]
+                    "phase": cds.get("phase", 0),
+                    "gene_id": cds.get("gene_id", transcript_id),
+                }
+                cds_index.setdefault(chrom, []).append(cds_entry)
+        # Sort intervals by start for each chromosome
+        for chrom in cds_index:
+            cds_index[chrom].sort(key=lambda x: x["start"])  # type: ignore[index]
+
+        gene_index: Dict[str, List[Dict[str, object]]] = {}
+        for (gff_chrom, start, end), info in gene_annotations.items():
+            entry = {
+                "start": start,
+                "end": end,
+                "gene_id": info.get("gene_id", ""),
+                "gene_name": info.get("gene_name", ""),
+                "feature_type": info.get("feature_type", ""),
+                "product": info.get("product", ""),
+            }
+            gene_index.setdefault(gff_chrom, []).append(entry)
+        for chrom in gene_index:
+            gene_index[chrom].sort(key=lambda x: x["start"])  # type: ignore[index]
         
         # Read VCF file
         open_func = gzip.open if str(vcf_path).endswith(".gz") else open
@@ -1139,9 +1208,9 @@ def add_consequences_to_vcf(
                             vcf_out.write(line)
                             continue
                         
-                        # Calculate consequence
+                        # Calculate consequence using indexed annotations
                         consequence_info = calculate_consequence(
-                            chrom, pos, ref, alt, reference, cds_features, gene_annotations
+                            chrom, pos, ref, alt, reference, cds_index, gene_index
                         )
                         
                         # Add consequence fields to INFO
