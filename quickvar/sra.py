@@ -221,6 +221,7 @@ def fasterq_dump(
 ) -> List[Path]:
     """
     Convert SRA file to FASTQ using fasterq-dump.
+    Checks for existing FASTQ files first and skips conversion if found.
     
     Args:
         run_id: SRA run ID (e.g., "SRR123456")
@@ -229,10 +230,28 @@ def fasterq_dump(
         threads: Number of threads for fasterq-dump
     
     Returns:
-        List of paths to generated FASTQ files
+        List of paths to generated FASTQ files (existing or newly created)
     """
     ensure_environment()
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check for existing FASTQ files first
+    existing_fastq_files = []
+    for pattern in [f"{run_id}_1.fastq", f"{run_id}_2.fastq", f"{run_id}.fastq"]:
+        fastq_path = output_dir / pattern
+        if fastq_path.exists():
+            existing_fastq_files.append(fastq_path)
+    
+    # Also check patterns without underscore
+    if not existing_fastq_files:
+        for pattern in [f"{run_id}.fastq", f"{run_id}_1.fastq", f"{run_id}_2.fastq"]:
+            fastq_path = output_dir / pattern
+            if fastq_path.exists():
+                existing_fastq_files.append(fastq_path)
+    
+    if existing_fastq_files:
+        logging.info(f"Found existing FASTQ file(s) for {run_id}, skipping conversion")
+        return sorted(existing_fastq_files)
     
     logging.info(f"Converting {run_id} to FASTQ...")
     
@@ -423,22 +442,37 @@ def save_sra_metadata(metadata: List[Dict[str, str]], output_file: Path) -> None
         logging.info(f"Created empty metadata table: {output_file}")
 
 
-def read_metadata_table(metadata_file: Path) -> List[str]:
-    """Read study IDs from metadata table."""
-    if not metadata_file.exists():
-        return []
+def read_metadata_table(metadata_file: Path) -> tuple[List[str], set[str]]:
+    """Read study IDs and run IDs from metadata table.
     
+    Returns:
+        Tuple of (list of study IDs, set of run IDs)
+    """
     study_ids = []
+    run_ids = set()
+    
+    if not metadata_file.exists():
+        return study_ids, run_ids
+    
     with open(metadata_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
         if len(lines) < 2:  # Header + at least one data row
-            return []
-        # Skip header, read study_accession column (column 0)
+            return study_ids, run_ids
+        
+        # Skip header, read data
         for line in lines[1:]:
             parts = line.strip().split("\t")
-            if parts and parts[0]:  # study_accession
+            if not parts:
+                continue
+            
+            # Check if this is a study row (study_accession starts with SRP or is a number)
+            # or a run row (run_accession starts with SRR)
+            if parts[0].startswith("SRR"):
+                run_ids.add(parts[0])
+            elif parts[0] and (parts[0].startswith("SRP") or parts[0].isdigit()):
                 study_ids.append(parts[0])
-    return study_ids
+    
+    return study_ids, run_ids
 
 
 def query_study_runs(study_id: str, metadata_file: Optional[Path] = None) -> List[str]:
@@ -519,15 +553,48 @@ def query_study_runs(study_id: str, metadata_file: Optional[Path] = None) -> Lis
         return []
 
 
+def check_processed_runs(output_dir: Path) -> set[str]:
+    """Check which runs have already been processed by looking for output directories.
+    
+    A run is considered processed if its output directory exists and contains results.
+    """
+    processed_runs = set()
+    
+    if not output_dir.exists():
+        return processed_runs
+    
+    for run_dir in output_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
+        
+        run_id = run_dir.name
+        
+        # Check if this directory contains processed results (VCF file or subdirectories with results)
+        # Look for VCF files or sample directories
+        vcf_files = list(run_dir.rglob("*.vcf.gz"))
+        sample_dirs = [d for d in run_dir.iterdir() if d.is_dir() and d.name.startswith(run_id)]
+        
+        if vcf_files or sample_dirs:
+            processed_runs.add(run_id)
+    
+    return processed_runs
+
+
 def download_and_convert_bioproject(
     bioproject_id: str,
     output_dir: Path,
     threads: int = 1,
     skip_prefetch: bool = False,
-) -> tuple[List[str], Path]:
+) -> tuple[List[str], Path, set[str]]:
     """
-    Query BioProject, generate metadata table FIRST with study IDs, 
+    Query BioProject, generate/update metadata table with study IDs, 
     then return study IDs for sequential processing (runs queried on-demand).
+    
+    Supports resuming interrupted runs:
+    - Checks for existing metadata table
+    - Queries BioProject again to get fresh study IDs
+    - Compares to find missing/new studies
+    - Returns only unprocessed studies
     
     Args:
         bioproject_id: NCBI BioProject ID (e.g., "PRJNA123456")
@@ -536,22 +603,43 @@ def download_and_convert_bioproject(
         skip_prefetch: If True, skip prefetch step (not used in query phase)
     
     Returns:
-        Tuple of (list of study IDs to process, path to metadata table file)
+        Tuple of (list of study IDs to process, path to metadata table file, set of already processed run IDs)
     """
     # Step 1: Create metadata file path
     metadata_file = output_dir / f"{bioproject_id}_metadata.tsv"
     
-    # Step 2: Query BioProject - creates metadata table with study IDs from XML response
-    logging.info(f"Querying BioProject {bioproject_id} and collecting metadata...")
+    # Step 2: Check existing metadata and processed runs
+    existing_study_ids, existing_run_ids = read_metadata_table(metadata_file)
+    processed_runs = check_processed_runs(output_dir)
+    
+    if metadata_file.exists():
+        logging.info(f"Found existing metadata table: {metadata_file}")
+        logging.info(f"Found {len(existing_study_ids)} study/studies and {len(existing_run_ids)} run(s) in existing metadata")
+        logging.info(f"Found {len(processed_runs)} already processed run(s)")
+    
+    # Step 3: Query BioProject again to get fresh study IDs from XML response
+    logging.info(f"Querying BioProject {bioproject_id} for fresh metadata...")
     _, _ = query_bioproject_with_metadata(bioproject_id, metadata_file=metadata_file)
     
-    # Step 3: Read study IDs from metadata table
-    study_ids = read_metadata_table(metadata_file)
+    # Step 4: Read updated study IDs from metadata table (after fresh query)
+    all_study_ids, all_run_ids = read_metadata_table(metadata_file)
     
-    if not study_ids:
+    if not all_study_ids:
         logging.warning(f"No study IDs found in metadata table for BioProject {bioproject_id}")
-        return [], metadata_file
+        return [], metadata_file, processed_runs
     
-    logging.info(f"Found {len(study_ids)} study/studies in metadata table")
-    return study_ids, metadata_file
+    # Step 5: Determine which studies to process
+    # We process all studies, but skip runs that are already processed
+    # Studies without runs will be queried on-demand during processing
+    new_studies = [s for s in all_study_ids if s not in existing_study_ids]
+    if new_studies:
+        logging.info(f"Found {len(new_studies)} new study/studies in BioProject")
+    
+    if existing_study_ids:
+        logging.info(f"Found {len(existing_study_ids)} existing study/studies in metadata table")
+    
+    logging.info(f"Total: {len(all_study_ids)} study/studies, {len(all_run_ids)} run(s) in metadata")
+    logging.info(f"Will process all studies, skipping {len(processed_runs)} already processed run(s)")
+    
+    return all_study_ids, metadata_file, processed_runs
 
