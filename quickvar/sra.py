@@ -33,7 +33,40 @@ def query_bioproject(bioproject_id: str) -> List[str]:
     """
     try:
         from pysradb import SRAweb
-        
+    except ImportError:
+        # Try to install pysradb if not available
+        logging.warning("pysradb not found, attempting to install...")
+        from .install import ensure_environment, run_micromamba, ENV_NAME
+        ensure_environment()  # Ensure environment exists
+        install_result = run_micromamba(
+            [
+                "install",
+                "-y",
+                "-n",
+                ENV_NAME,
+                "-c",
+                "bioconda",
+                "-c",
+                "conda-forge",
+                "pysradb>=2.0",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if install_result.returncode == 0:
+            logging.info("Successfully installed pysradb, retrying...")
+            from pysradb import SRAweb  # Retry import after installation
+        else:
+            error_msg = install_result.stderr or install_result.stdout or "unknown error"
+            logging.error(
+                f"pysradb not installed in QuickVar environment and installation failed. "
+                f"Run 'python -m quickvar.install' to install dependencies. "
+                f"Error: {error_msg}"
+            )
+            raise ImportError("pysradb could not be imported or installed")
+    
+    try:
         logging.info(f"Querying BioProject {bioproject_id} for SRA runs...")
         db = SRAweb()
         
@@ -137,9 +170,10 @@ def query_bioproject(bioproject_id: str) -> List[str]:
         logging.info(f"Found {len(run_ids)} SRA run(s) for BioProject {bioproject_id}")
         return run_ids
         
-    except ImportError:
+    except ImportError as e:
+        # This should have been caught earlier, but handle it here too
         logging.error(
-            "pysradb not installed in QuickVar environment. "
+            f"pysradb not installed in QuickVar environment: {e}. "
             "Run 'python -m quickvar.install' to install dependencies."
         )
         raise
