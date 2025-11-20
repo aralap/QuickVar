@@ -23,14 +23,13 @@ Micromamba is installed automatically into a user-level cache (`~/.quickvar`). N
 
 ## Quick Start
 
-### Optional: Install the CLI and Python Dependencies
+### Optional: Install the CLI
 ```bash
 python -m pip install -e .
 ```
-Installing in editable mode:
-- Exposes the `quickvar`, `quickvar-install`, and `quickvar-align` commands on your PATH
-- Installs Python dependencies (currently `pysradb` for BioProject/SRA functionality)
-- You can also run the modules directly (as shown below) without installing, but you'll need to install `pysradb` separately if using `--bioproject`
+Installing in editable mode exposes the `quickvar`, `quickvar-install`, and `quickvar-align` commands on your PATH. You can also run the modules directly (as shown below) without installing.
+
+**Note:** Python dependencies like `pysradb` are automatically installed in the Micromamba environment when you run `python -m quickvar.install`.
 
 ### 1. Install QuickVar Dependencies
 
@@ -38,7 +37,7 @@ Installing in editable mode:
 ```bash
 python -m quickvar.install
 ```
-This downloads Micromamba (if needed) and creates the `quickvar` environment containing `minimap2`, `samtools`, and `bcftools`.
+This downloads Micromamba (if needed) and creates the `quickvar` environment containing `minimap2`, `samtools`, `bcftools`, `sra-tools`, and `pysradb` (installed via pip).
 
 #### Windows (WSL2)
 1. Open **PowerShell as Administrator** and enable Ubuntu on WSL2:
@@ -97,14 +96,10 @@ The example below walks through a complete run using public test data.
 
 2. **Install dependencies**  
    ```bash
-   # Install Python dependencies (including pysradb for BioProject support)
-   python -m pip install -e .
-   
-   # Install bioinformatics tools via Micromamba
    python -m quickvar.install
    ```
-   This installs Python dependencies (like `pysradb`) and downloads Micromamba (if necessary) to build the `quickvar` environment with `minimap2`, `samtools`, `bcftools`, and `sra-tools`.  
-   *Windows users:* run these commands inside an Ubuntu WSL2 session (see Quick Start step 1).
+   This downloads Micromamba (if necessary) and builds the `quickvar` environment with `minimap2`, `samtools`, `bcftools`, `sra-tools`, and `pysradb` (for BioProject support). All dependencies are installed automatically in the Micromamba environment.  
+   *Windows users:* run this command inside an Ubuntu WSL2 session (see Quick Start step 1).
 
 3. **Run alignment and variant calling**  
    ```bash

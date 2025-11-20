@@ -139,8 +139,9 @@ def query_bioproject(bioproject_id: str) -> List[str]:
         
     except ImportError:
         logging.error(
-            "pysradb not installed. Install Python dependencies with: "
-            "pip install -e .  (or: pip install pysradb)"
+            "pysradb not installed in QuickVar environment. "
+            "Run 'python -m quickvar.install' to install dependencies, "
+            "or install manually: pip install pysradb"
         )
         raise
     except Exception as e:
