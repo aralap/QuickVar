@@ -140,8 +140,7 @@ def query_bioproject(bioproject_id: str) -> List[str]:
     except ImportError:
         logging.error(
             "pysradb not installed in QuickVar environment. "
-            "Run 'python -m quickvar.install' to install dependencies, "
-            "or install manually: pip install pysradb"
+            "Run 'python -m quickvar.install' to install dependencies."
         )
         raise
     except Exception as e:
