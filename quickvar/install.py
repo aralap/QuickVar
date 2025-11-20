@@ -29,7 +29,6 @@ QUICKVAR_PACKAGES = [
     "samtools>=1.19",
     "bcftools>=1.19",
     "sra-tools>=3.0",
-    "pysradb>=2.0",  # Available in bioconda
 ]
 
 
@@ -169,38 +168,6 @@ def ensure_environment(force: bool = False) -> Path:
     """Ensure the QuickVar environment exists and return its path."""
     ensure_cache_dirs()
     create_environment(force=force)
-    
-    # Ensure pysradb is installed (in case environment existed but pysradb wasn't installed)
-    import logging as _logging
-    result = micromamba_run(
-        ["python", "-c", "import pysradb"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        _logging.info("pysradb not found in environment, installing via micromamba...")
-        install_result = run_micromamba(
-            [
-                "install",
-                "-y",
-                "-n",
-                ENV_NAME,
-                "-c",
-                "bioconda",
-                "-c",
-                "conda-forge",
-                "pysradb>=2.0",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if install_result.returncode == 0:
-            _logging.info("Successfully installed pysradb")
-        else:
-            _logging.warning(f"Could not install pysradb via micromamba: {install_result.stderr or 'unknown error'}")
-    
     return MAMBA_ROOT_PREFIX / "envs" / ENV_NAME
 
 
@@ -242,41 +209,6 @@ def main(argv: list[str] | None = None) -> int:
             shutil.rmtree(MICROMAMBA_DIR)
         return 0
     env_path = ensure_environment(force=args.force)
-    
-    # Verify pysradb is installed
-    result = micromamba_run(
-        ["python", "-c", "import pysradb; print('pysradb version:', pysradb.__version__)"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        # Try to install pysradb if not available via micromamba
-        print("Installing pysradb in QuickVar environment...")
-        install_result = run_micromamba(
-            [
-                "install",
-                "-y",
-                "-n",
-                ENV_NAME,
-                "-c",
-                "bioconda",
-                "-c",
-                "conda-forge",
-                "pysradb>=2.0",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if install_result.returncode == 0:
-            print("Successfully installed pysradb")
-        else:
-            print(f"Warning: Could not install pysradb: {install_result.stderr or 'unknown error'}")
-            print("You may need to install it manually: micromamba install -n quickvar -c bioconda pysradb")
-    elif result.stdout:
-        # pysradb is already installed, show version
-        print(result.stdout.strip())
     
     if args.show_path:
         print(env_path)

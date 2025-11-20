@@ -10,9 +10,7 @@ readme = "README.md"
 authors = [{name = "Ariel Aptekmann", email = "arielaptekmann@hmh-cdi.org"}]
 license = {file = "LICENSE"}
 requires-python = ">=3.10"
-dependencies = [
-    "pysradb>=1.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [

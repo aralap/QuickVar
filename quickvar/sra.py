@@ -23,7 +23,7 @@ def ensure_sra_cache() -> Path:
 
 def query_bioproject(bioproject_id: str) -> List[str]:
     """
-    Query BioProject ID to get list of SRA run IDs.
+    Query BioProject ID to get list of SRA run IDs using NCBI Entrez E-utilities API.
     
     Args:
         bioproject_id: NCBI BioProject ID (e.g., "PRJNA123456")
@@ -31,54 +31,16 @@ def query_bioproject(bioproject_id: str) -> List[str]:
     Returns:
         List of SRA run IDs (e.g., ["SRR123456", "SRR123457"])
     """
-    try:
-        from pysradb import SRAweb
-    except ImportError:
-        # Try to install pysradb if not available
-        logging.warning("pysradb not found, attempting to install...")
-        from .install import ensure_environment, run_micromamba, ENV_NAME
-        ensure_environment()  # Ensure environment exists
-        install_result = run_micromamba(
-            [
-                "install",
-                "-y",
-                "-n",
-                ENV_NAME,
-                "-c",
-                "bioconda",
-                "-c",
-                "conda-forge",
-                "pysradb>=2.0",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if install_result.returncode == 0:
-            logging.info("Successfully installed pysradb, retrying...")
-            from pysradb import SRAweb  # Retry import after installation
-        else:
-            error_msg = install_result.stderr or install_result.stdout or "unknown error"
-            logging.error(
-                f"pysradb not installed in QuickVar environment and installation failed. "
-                f"Run 'python -m quickvar.install' to install dependencies. "
-                f"Error: {error_msg}"
-            )
-            raise ImportError("pysradb could not be imported or installed")
+    import urllib.request
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    import time
+    
+    logging.info(f"Querying BioProject {bioproject_id} for SRA runs...")
+    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     
     try:
-        logging.info(f"Querying BioProject {bioproject_id} for SRA runs...")
-        db = SRAweb()
-        
-        # First, try to convert BioProject to SRP using Entrez
-        # Search for the BioProject in SRA database
-        import urllib.request
-        import urllib.parse
-        import xml.etree.ElementTree as ET
-        
-        # Use Entrez to link BioProject to SRA
-        base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-        # First, search for the BioProject in BioProject database
+        # Step 1: Search for the BioProject in BioProject database
         search_params = {
             "db": "bioproject",
             "term": bioproject_id,
@@ -86,96 +48,106 @@ def query_bioproject(bioproject_id: str) -> List[str]:
         }
         search_url = f"{base_url}esearch.fcgi?{urllib.parse.urlencode(search_params)}"
         
-        try:
-            with urllib.request.urlopen(search_url) as response:
-                search_xml = response.read().decode()
-                root = ET.fromstring(search_xml)
-                bioproject_ids = [id_elem.text for id_elem in root.findall(".//Id")]
-                
-                if not bioproject_ids:
-                    logging.warning(f"BioProject {bioproject_id} not found in NCBI")
-                    return []
-                
-                # Now link BioProject to SRA
-                link_params = {
-                    "dbfrom": "bioproject",
+        with urllib.request.urlopen(search_url) as response:
+            search_xml = response.read().decode()
+            root = ET.fromstring(search_xml)
+            bioproject_ids = [id_elem.text for id_elem in root.findall(".//Id")]
+            
+            if not bioproject_ids:
+                logging.warning(f"BioProject {bioproject_id} not found in NCBI")
+                return []
+        
+        # Small delay to respect NCBI rate limits
+        time.sleep(0.34)
+        
+        # Step 2: Link BioProject to SRA studies (SRP)
+        link_params = {
+            "dbfrom": "bioproject",
+            "db": "sra",
+            "id": bioproject_ids[0],
+            "retmode": "xml",
+        }
+        link_url = f"{base_url}elink.fcgi?{urllib.parse.urlencode(link_params)}"
+        
+        with urllib.request.urlopen(link_url) as response:
+            link_xml = response.read().decode()
+            link_root = ET.fromstring(link_xml)
+            sra_study_ids = [id_elem.text for id_elem in link_root.findall(".//Id")]
+            
+            if not sra_study_ids:
+                logging.warning(f"No SRA studies found for BioProject {bioproject_id}")
+                return []
+        
+        logging.info(f"Found {len(sra_study_ids)} SRA study/studies for BioProject {bioproject_id}")
+        
+        # Step 3: Get runs from each SRP study using efetch
+        # First get the study record ID, then fetch detailed XML containing run accessions
+        all_run_ids = []
+        for srp in sra_study_ids:
+            time.sleep(0.34)  # Rate limiting
+            
+            try:
+                # First, search for the study to get its internal record ID
+                study_search_params = {
                     "db": "sra",
-                    "id": bioproject_ids[0],
+                    "term": srp,
                     "retmode": "xml",
                 }
-                link_url = f"{base_url}elink.fcgi?{urllib.parse.urlencode(link_params)}"
+                study_search_url = f"{base_url}esearch.fcgi?{urllib.parse.urlencode(study_search_params)}"
                 
-                with urllib.request.urlopen(link_url) as response:
-                    link_xml = response.read().decode()
-                    link_root = ET.fromstring(link_xml)
-                    sra_ids = [id_elem.text for id_elem in link_root.findall(".//Id")]
+                with urllib.request.urlopen(study_search_url) as response:
+                    study_search_xml = response.read().decode()
+                    study_search_root = ET.fromstring(study_search_xml)
+                    study_record_ids = [id_elem.text for id_elem in study_search_root.findall(".//Id")]
                     
-                    if not sra_ids:
-                        logging.warning(f"No SRA studies found for BioProject {bioproject_id}")
-                        return []
+                    if not study_record_ids:
+                        logging.debug(f"Could not find record ID for study {srp}")
+                        continue
+                
+                time.sleep(0.34)  # Rate limiting
+                
+                # Use efetch to get detailed record XML, which includes run accessions
+                fetch_params = {
+                    "db": "sra",
+                    "id": study_record_ids[0],
+                    "retmode": "xml",
+                }
+                fetch_url = f"{base_url}efetch.fcgi?{urllib.parse.urlencode(fetch_params)}"
+                
+                with urllib.request.urlopen(fetch_url) as response:
+                    fetch_xml = response.read().decode()
+                    fetch_root = ET.fromstring(fetch_xml)
                     
-                    # Get runs from each SRP
-                    run_ids = []
-                    for srp in sra_ids:
-                        try:
-                            srp_runs = db.srp_to_srr(srp)
-                            if srp_runs is not None and not srp_runs.empty:
-                                if "run_accession" in srp_runs.columns:
-                                    run_ids.extend(srp_runs["run_accession"].dropna().tolist())
-                                elif "srr" in srp_runs.columns:
-                                    run_ids.extend(srp_runs["srr"].dropna().tolist())
-                        except Exception as e:
-                            logging.debug(f"Failed to get runs from {srp}: {e}")
-                            continue
+                    # Extract run accessions from RUN elements
+                    # RUN elements have accession attribute with SRR* values
+                    runs = fetch_root.findall(".//RUN")
+                    for run in runs:
+                        accession = run.get("accession")
+                        if accession and accession.startswith("SRR"):
+                            all_run_ids.append(accession)
                     
-                    if run_ids:
-                        run_ids = [str(run_id).strip() for run_id in run_ids if run_id and str(run_id).startswith("SRR")]
-                        run_ids = list(set(run_ids))  # Remove duplicates
-                        logging.info(f"Found {len(run_ids)} SRA run(s) for BioProject {bioproject_id}")
-                        return run_ids
-        except Exception as e:
-            logging.debug(f"Entrez API approach failed: {e}, trying search_sra fallback")
+                    logging.debug(f"Found {len([r for r in all_run_ids if r.startswith('SRR') and r not in [x for x in all_run_ids[:-1] if x.startswith('SRR')]])} runs from study {srp}")
+                        
+            except Exception as e:
+                logging.debug(f"Failed to get runs from study {srp}: {e}")
+                continue
         
-        # Fallback: Try search_sra with BioProject ID
-        df = db.search_sra(bioproject_id, detailed=True)
-        
-        if df is None or df.empty:
+        if not all_run_ids:
             logging.warning(f"No SRA runs found for BioProject {bioproject_id}")
             return []
         
-        # Extract run accessions
-        run_ids = []
-        if "run_accession" in df.columns:
-            run_ids = df["run_accession"].dropna().unique().tolist()
-        elif "study_accession" in df.columns:
-            # Get runs from SRP
-            srp_list = df["study_accession"].dropna().unique().tolist()
-            for srp in srp_list:
-                try:
-                    srp_runs = db.srp_to_srr(srp)
-                    if srp_runs is not None and not srp_runs.empty:
-                        if "run_accession" in srp_runs.columns:
-                            run_ids.extend(srp_runs["run_accession"].dropna().tolist())
-                        elif "srr" in srp_runs.columns:
-                            run_ids.extend(srp_runs["srr"].dropna().tolist())
-                except Exception:
-                    continue
-        
-        if not run_ids:
-            logging.warning(f"Could not find run accession column in BioProject query results")
-            return []
-        
-        run_ids = [str(run_id).strip() for run_id in run_ids if run_id and str(run_id).startswith("SRR")]
+        # Step 4: Filter and clean run IDs (keep only SRR* accessions)
+        run_ids = [str(run_id).strip() for run_id in all_run_ids if run_id and str(run_id).startswith("SRR")]
         run_ids = list(set(run_ids))  # Remove duplicates
-        logging.info(f"Found {len(run_ids)} SRA run(s) for BioProject {bioproject_id}")
+        
+        logging.info(f"Found {len(run_ids)} unique SRA run(s) for BioProject {bioproject_id}")
         return run_ids
         
-    except ImportError as e:
-        # This should have been caught earlier, but handle it here too
-        logging.error(
-            f"pysradb not installed in QuickVar environment: {e}. "
-            "Run 'python -m quickvar.install' to install dependencies."
-        )
+    except urllib.error.HTTPError as e:
+        logging.error(f"HTTP error querying BioProject {bioproject_id}: {e}")
+        raise
+    except ET.ParseError as e:
+        logging.error(f"XML parse error querying BioProject {bioproject_id}: {e}")
         raise
     except Exception as e:
         logging.error(f"Failed to query BioProject {bioproject_id}: {e}")
