@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .install import ensure_environment, micromamba_run
 from .settings import CACHE_DIR
@@ -174,6 +174,7 @@ def prefetch_sra(run_id: str, output_dir: Optional[Path] = None) -> Optional[Pat
     logging.info(f"Downloading SRA file for {run_id}...")
     
     try:
+        # Stream output to show native progress from prefetch
         result = micromamba_run(
             [
                 "prefetch",
@@ -182,13 +183,12 @@ def prefetch_sra(run_id: str, output_dir: Optional[Path] = None) -> Optional[Pat
                 run_id,
             ],
             check=False,
-            capture_output=True,
+            capture_output=False,  # Stream output to show progress
             text=True,
         )
         
         if result.returncode != 0:
-            error_msg = result.stderr or result.stdout or "unknown error"
-            logging.warning(f"prefetch failed for {run_id}: {error_msg}")
+            logging.warning(f"prefetch failed for {run_id} (exit code {result.returncode})")
             return None
         
         # prefetch creates a directory with the run_id, containing the .sra file
@@ -277,16 +277,16 @@ def fasterq_dump(
             # fasterq-dump can download directly if we provide the run_id
             args.append(run_id)
         
+        # Stream output to show native progress from fasterq-dump
         result = micromamba_run(
             args,
             check=False,
-            capture_output=True,
+            capture_output=False,  # Stream output to show progress
             text=True,
         )
         
         if result.returncode != 0:
-            error_msg = result.stderr or result.stdout or "unknown error"
-            logging.warning(f"fasterq-dump failed for {run_id}: {error_msg}")
+            logging.warning(f"fasterq-dump failed for {run_id} (exit code {result.returncode})")
             return []
         
         # Find generated FASTQ files
@@ -315,45 +315,243 @@ def fasterq_dump(
         return []
 
 
+def query_bioproject_with_metadata(
+    bioproject_id: str, 
+    metadata_file: Optional[Path] = None
+) -> tuple[List[str], List[Dict[str, str]]]:
+    """
+    Query BioProject ID to get list of SRA run IDs and their metadata.
+    
+    Args:
+        bioproject_id: NCBI BioProject ID (e.g., "PRJNA123456")
+    
+    Returns:
+        Tuple of (list of SRA run IDs, list of metadata dictionaries)
+    """
+    import urllib.request
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    import time
+    
+    logging.info(f"Querying BioProject {bioproject_id} for SRA runs with metadata...")
+    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+    
+    try:
+        # Step 1: Search for the BioProject in BioProject database
+        search_params = {
+            "db": "bioproject",
+            "term": bioproject_id,
+            "retmode": "xml",
+        }
+        search_url = f"{base_url}esearch.fcgi?{urllib.parse.urlencode(search_params)}"
+        
+        with urllib.request.urlopen(search_url) as response:
+            search_xml = response.read().decode()
+            root = ET.fromstring(search_xml)
+            bioproject_ids = [id_elem.text for id_elem in root.findall(".//Id")]
+            
+            if not bioproject_ids:
+                logging.warning(f"BioProject {bioproject_id} not found in NCBI")
+                return [], []
+        
+        time.sleep(0.34)
+        
+        # Step 2: Link BioProject to SRA studies (SRP)
+        link_params = {
+            "dbfrom": "bioproject",
+            "db": "sra",
+            "id": bioproject_ids[0],
+            "retmode": "xml",
+        }
+        link_url = f"{base_url}elink.fcgi?{urllib.parse.urlencode(link_params)}"
+        
+        with urllib.request.urlopen(link_url) as response:
+            link_xml = response.read().decode()
+            link_root = ET.fromstring(link_xml)
+            sra_study_ids = [id_elem.text for id_elem in link_root.findall(".//Id")]
+            
+            if not sra_study_ids:
+                logging.warning(f"No SRA studies found for BioProject {bioproject_id}")
+                return [], []
+        
+        logging.info(f"Found {len(sra_study_ids)} SRA study/studies for BioProject {bioproject_id}")
+        
+        # Save the study IDs from XML response as metadata table FIRST (before processing individual studies)
+        if metadata_file:
+            metadata_file.parent.mkdir(parents=True, exist_ok=True)
+            header_fields = ["study_accession", "bioproject_id"]
+            with open(metadata_file, "w", encoding="utf-8") as f:
+                f.write("\t".join(header_fields) + "\n")
+                for study_id in sra_study_ids:
+                    f.write(f"{study_id}\t{bioproject_id}\n")
+            logging.info(f"Saved SRA study metadata table: {metadata_file} ({len(sra_study_ids)} studies)")
+        
+        # No bulk querying of runs - they will be queried on-demand during processing
+        # Return empty run_ids and metadata - actual run processing happens later
+        return [], []
+        
+    except urllib.error.HTTPError as e:
+        logging.error(f"HTTP error querying BioProject {bioproject_id}: {e}")
+        raise
+    except ET.ParseError as e:
+        logging.error(f"XML parse error querying BioProject {bioproject_id}: {e}")
+        raise
+    except Exception as e:
+        logging.error(f"Failed to query BioProject {bioproject_id}: {e}")
+        raise
+
+
+def save_sra_metadata(metadata: List[Dict[str, str]], output_file: Path) -> None:
+    """Save SRA metadata to a TSV file. Creates file even if metadata is empty (header only)."""
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    header_fields = ["run_accession", "study_accession", "study_title", "total_spots", "total_bases", "size"]
+    
+    with open(output_file, "w", encoding="utf-8") as f:
+        # Write header
+        f.write("\t".join(header_fields) + "\n")
+        
+        # Write data
+        if metadata:
+            for meta in metadata:
+                row = [str(meta.get(field, "")) for field in header_fields]
+                f.write("\t".join(row) + "\n")
+    
+    if metadata:
+        logging.info(f"Saved SRA metadata to {output_file} ({len(metadata)} entries)")
+    else:
+        logging.info(f"Created empty metadata table: {output_file}")
+
+
+def read_metadata_table(metadata_file: Path) -> List[str]:
+    """Read study IDs from metadata table."""
+    if not metadata_file.exists():
+        return []
+    
+    study_ids = []
+    with open(metadata_file, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+        if len(lines) < 2:  # Header + at least one data row
+            return []
+        # Skip header, read study_accession column (column 0)
+        for line in lines[1:]:
+            parts = line.strip().split("\t")
+            if parts and parts[0]:  # study_accession
+                study_ids.append(parts[0])
+    return study_ids
+
+
+def query_study_runs(study_id: str, metadata_file: Optional[Path] = None) -> List[str]:
+    """Query a single study to get its run IDs. Optionally update metadata table."""
+    import urllib.request
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    import time
+    
+    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+    run_ids = []
+    
+    try:
+        # Search for the study to get its internal record ID
+        study_search_params = {
+            "db": "sra",
+            "term": study_id,
+            "retmode": "xml",
+        }
+        study_search_url = f"{base_url}esearch.fcgi?{urllib.parse.urlencode(study_search_params)}"
+        
+        time.sleep(0.34)  # Rate limiting
+        
+        with urllib.request.urlopen(study_search_url) as response:
+            study_search_xml = response.read().decode()
+            study_search_root = ET.fromstring(study_search_xml)
+            study_record_ids = [id_elem.text for id_elem in study_search_root.findall(".//Id")]
+            
+            if not study_record_ids:
+                logging.debug(f"Could not find record ID for study {study_id}")
+                return []
+        
+        time.sleep(0.34)  # Rate limiting
+        
+        # Use efetch to get detailed record XML
+        fetch_params = {
+            "db": "sra",
+            "id": study_record_ids[0],
+            "retmode": "xml",
+        }
+        fetch_url = f"{base_url}efetch.fcgi?{urllib.parse.urlencode(fetch_params)}"
+        
+        with urllib.request.urlopen(fetch_url) as response:
+            fetch_xml = response.read().decode()
+            fetch_root = ET.fromstring(fetch_xml)
+            
+            # Extract run accessions from RUN elements
+            runs = fetch_root.findall(".//RUN")
+            for run in runs:
+                accession = run.get("accession")
+                if accession and accession.startswith("SRR"):
+                    run_ids.append(accession)
+            
+            # Update metadata table if provided
+            if metadata_file and run_ids:
+                # Check if runs are already in table
+                existing_runs = set()
+                if metadata_file.exists():
+                    with open(metadata_file, "r", encoding="utf-8") as f:
+                        for line in f.readlines()[1:]:  # Skip header
+                            parts = line.strip().split("\t")
+                            if len(parts) > 0 and parts[0].startswith("SRR"):
+                                existing_runs.add(parts[0])
+                
+                # Append new runs to table
+                new_runs = [r for r in run_ids if r not in existing_runs]
+                if new_runs:
+                    header_fields = ["run_accession", "study_accession", "bioproject_id"]
+                    with open(metadata_file, "a", encoding="utf-8") as f:
+                        for run_id in new_runs:
+                            f.write(f"{run_id}\t{study_id}\t\n")  # bioproject_id empty for now
+                    logging.debug(f"Added {len(new_runs)} runs from study {study_id} to metadata table")
+        
+        return run_ids
+        
+    except Exception as e:
+        logging.debug(f"Failed to query study {study_id}: {e}")
+        return []
+
+
 def download_and_convert_bioproject(
     bioproject_id: str,
     output_dir: Path,
     threads: int = 1,
     skip_prefetch: bool = False,
-) -> List[Path]:
+) -> tuple[List[str], Path]:
     """
-    Download and convert all SRA runs from a BioProject to FASTQ.
+    Query BioProject, generate metadata table FIRST with study IDs, 
+    then return study IDs for sequential processing (runs queried on-demand).
     
     Args:
         bioproject_id: NCBI BioProject ID (e.g., "PRJNA123456")
-        output_dir: Directory to save FASTQ files
-        threads: Number of threads for fasterq-dump
-        skip_prefetch: If True, skip prefetch step (fasterq-dump will download if needed)
+        output_dir: Directory to save metadata table
+        threads: Number of threads for fasterq-dump (not used in query phase)
+        skip_prefetch: If True, skip prefetch step (not used in query phase)
     
     Returns:
-        List of paths to all generated FASTQ files
+        Tuple of (list of study IDs to process, path to metadata table file)
     """
-    # Query BioProject for SRA run IDs
-    run_ids = query_bioproject(bioproject_id)
+    # Step 1: Create metadata file path
+    metadata_file = output_dir / f"{bioproject_id}_metadata.tsv"
     
-    if not run_ids:
-        logging.warning(f"No SRA runs found for BioProject {bioproject_id}")
-        return []
+    # Step 2: Query BioProject - creates metadata table with study IDs from XML response
+    logging.info(f"Querying BioProject {bioproject_id} and collecting metadata...")
+    _, _ = query_bioproject_with_metadata(bioproject_id, metadata_file=metadata_file)
     
-    all_fastq_files = []
+    # Step 3: Read study IDs from metadata table
+    study_ids = read_metadata_table(metadata_file)
     
-    for run_id in run_ids:
-        logging.info(f"Processing {run_id}...")
-        
-        # Optionally prefetch (for better caching)
-        sra_file = None
-        if not skip_prefetch:
-            sra_file = prefetch_sra(run_id)
-        
-        # Convert to FASTQ
-        fastq_files = fasterq_dump(run_id, output_dir, sra_file=sra_file, threads=threads)
-        all_fastq_files.extend(fastq_files)
+    if not study_ids:
+        logging.warning(f"No study IDs found in metadata table for BioProject {bioproject_id}")
+        return [], metadata_file
     
-    logging.info(f"Downloaded and converted {len(all_fastq_files)} FASTQ file(s) from BioProject {bioproject_id}")
-    return all_fastq_files
+    logging.info(f"Found {len(study_ids)} study/studies in metadata table")
+    return study_ids, metadata_file
 

@@ -16,7 +16,7 @@ import os
 from .install import ensure_environment, micromamba_run
 from .reference import ensure_reference
 from .settings import REFERENCE_REGISTRY
-from .sra import download_and_convert_bioproject
+from .sra import download_and_convert_bioproject, fasterq_dump, prefetch_sra, query_study_runs
 
 FASTQ_SUFFIXES = (".fastq", ".fq", ".fastq.gz", ".fq.gz")
 DEFAULT_OUTPUT_NAME = "Results"
@@ -810,47 +810,120 @@ def main(argv: list[str] | None = None) -> int:
     ensure_environment()
     reference = ensure_reference(reference_key=args.reference, force=args.force_reference)
 
-    # Handle BioProject download
+    # Handle BioProject download - process each SRA sequentially
     if args.bioproject:
-        logging.info(f"Downloading and converting SRA files from BioProject {args.bioproject}...")
+        logging.info(f"Processing BioProject {args.bioproject}...")
         try:
-            # Create temporary directory for downloaded FASTQ files
-            fastq_temp_dir = output_dir / "sra_downloads"
-            fastq_files = download_and_convert_bioproject(
+            # Query BioProject and generate metadata table with study IDs
+            study_ids, metadata_file = download_and_convert_bioproject(
                 bioproject_id=args.bioproject,
-                output_dir=fastq_temp_dir,
+                output_dir=output_dir,
                 threads=threads,
                 skip_prefetch=args.skip_prefetch,
             )
             
-            if not fastq_files:
-                logging.error(f"No FASTQ files were generated from BioProject {args.bioproject}")
+            if not study_ids:
+                logging.error(f"No study IDs found for BioProject {args.bioproject}")
                 return 1
             
-            # Use downloaded FASTQ files as input
-            input_path = fastq_temp_dir
+            logging.info(f"Metadata table saved to {metadata_file}")
+            logging.info(f"Processing {len(study_ids)} study/studies sequentially...")
+            
+            # Process each study sequentially - query runs on-demand
+            for study_id in study_ids:
+                logging.info(f"Querying runs from study {study_id}...")
+                
+                # Query this study's runs on-demand (only if not already in metadata table)
+                run_ids = query_study_runs(study_id, metadata_file=metadata_file)
+                
+                if not run_ids:
+                    logging.warning(f"No runs found for study {study_id}, skipping...")
+                    continue
+                
+                logging.info(f"Found {len(run_ids)} run(s) in study {study_id}")
+                
+                # Process each SRA run from this study
+                for run_id in run_ids:
+                    logging.info(f"Processing SRA run {run_id}...")
+                    
+                    # Create output subfolder for this SRA run
+                    sra_output_dir = output_dir / run_id
+                    sra_output_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Create temporary directory for FASTQ files for this run
+                    fastq_temp_dir = sra_output_dir / "fastq"
+                    
+                    try:
+                        # Optionally prefetch (for better caching)
+                        sra_file = None
+                        if not args.skip_prefetch:
+                            sra_file = prefetch_sra(run_id)
+                        
+                        # Convert to FASTQ
+                        fastq_files = fasterq_dump(
+                            run_id, 
+                            fastq_temp_dir, 
+                            sra_file=sra_file, 
+                            threads=threads
+                        )
+                        
+                        if not fastq_files:
+                            logging.warning(f"No FASTQ files generated for {run_id}, skipping...")
+                            continue
+                        
+                        # Group FASTQ files into samples
+                        fastqs = discover_fastqs(fastq_temp_dir)
+                        samples = group_samples(fastqs)
+                        
+                        # Process each sample from this SRA run
+                        for sample in samples:
+                            # Use the SRA run ID as the sample name prefix
+                            original_name = sample.name
+                            sample.name = f"{run_id}_{original_name}"
+                            
+                            align_sample(
+                                sample,
+                                reference,
+                                sra_output_dir,  # Results go in SRA-specific subfolder
+                                threads,
+                                args.keep_intermediate,
+                                args.ploidy,
+                                args.amplicon,
+                                args.deduplicate,
+                                args.annotate,
+                                args.reference,
+                            )
+                        
+                    except Exception as e:
+                        logging.error(f"Failed to process SRA run {run_id}: {e}")
+                        logging.error(f"Continuing with next SRA run...")
+                        continue
+            
+            logging.info(f"Completed processing BioProject {args.bioproject}")
+            return 0
+            
         except Exception as e:
-            logging.error(f"Failed to download/convert BioProject {args.bioproject}: {e}")
+            logging.error(f"Failed to process BioProject {args.bioproject}: {e}")
             return 1
     else:
+        # Standard processing of local FASTQ files
         input_path = Path(args.input).expanduser().resolve()
+        fastqs = discover_fastqs(input_path)
+        samples = group_samples(fastqs)
 
-    fastqs = discover_fastqs(input_path)
-    samples = group_samples(fastqs)
-
-    for sample in samples:
-        align_sample(
-            sample,
-            reference,
-            output_dir,
-            threads,
-            args.keep_intermediate,
-            args.ploidy,
-            args.amplicon,
-            args.deduplicate,
-            args.annotate,
-            args.reference,
-        )
+        for sample in samples:
+            align_sample(
+                sample,
+                reference,
+                output_dir,
+                threads,
+                args.keep_intermediate,
+                args.ploidy,
+                args.amplicon,
+                args.deduplicate,
+                args.annotate,
+                args.reference,
+            )
 
     logging.info("Completed processing %d sample(s)", len(samples))
     return 0
