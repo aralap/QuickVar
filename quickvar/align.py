@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import os
+import shutil
 
 from .install import ensure_environment, micromamba_run
 from .reference import ensure_reference
@@ -1385,6 +1386,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--keep-intermediate", action="store_true", help="Retain SAM and BCF intermediates")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--force-reference", action="store_true", help="Redownload and reindex reference genome")
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="In --bioproject mode, delete FASTQ and BAM files for each SRA run after it finishes",
+    )
     return parser.parse_args(argv)
 
 
@@ -1465,6 +1471,7 @@ def main(argv: list[str] | None = None) -> int:
                     fastq_temp_dir = sra_output_dir / "fastq"
                     
                     try:
+                        run_completed = False
                         # Optionally prefetch (for better caching)
                         sra_file = None
                         if not args.skip_prefetch:
@@ -1504,6 +1511,29 @@ def main(argv: list[str] | None = None) -> int:
                                 args.annotate,
                                 args.reference,
                             )
+                        
+                        # If we reached here without exceptions, mark run as completed
+                        run_completed = True
+
+                        # Optional cleanup: remove FASTQ and BAM files for this run (BioProject mode only)
+                        if args.cleanup and run_completed:
+                            logging.info(f"Cleaning up intermediates for SRA run {run_id} (FASTQ and BAM files)")
+                            # Remove FASTQ directory for this run
+                            if fastq_temp_dir.exists():
+                                try:
+                                    shutil.rmtree(fastq_temp_dir)
+                                except Exception as e:
+                                    logging.warning(f"Failed to remove FASTQ directory {fastq_temp_dir}: {e}")
+
+                            # Remove BAM files and their indexes under this SRA output directory
+                            for bam_path in sra_output_dir.rglob("*.bam"):
+                                try:
+                                    bam_index = bam_path.with_suffix(bam_path.suffix + ".bai")
+                                    if bam_index.exists():
+                                        bam_index.unlink()
+                                    bam_path.unlink()
+                                except Exception as e:
+                                    logging.warning(f"Failed to remove BAM file {bam_path}: {e}")
                         
                     except Exception as e:
                         logging.error(f"Failed to process SRA run {run_id}: {e}")
