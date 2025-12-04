@@ -28,6 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--bioproject",
         help="NCBI BioProject ID (e.g., PRJNA123456) to download and process SRA files",
     )
+    align_parser.add_argument(
+        "--srr",
+        help="Single SRA run ID (e.g., SRR123456) to download and process",
+    )
     align_parser.add_argument("--output", default=align_module.DEFAULT_OUTPUT_NAME, help="Output directory")
     align_parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads")
     align_parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy (default: 1)")
@@ -52,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
     align_parser.add_argument("--keep-intermediate", action="store_true", help="Keep SAM and BCF files")
     align_parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     align_parser.add_argument("--force-reference", action="store_true", help="Redownload reference data")
+    align_parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="In --bioproject or --srr mode, delete FASTQ and BAM files after processing",
+    )
 
     return parser
 
@@ -89,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
             align_args.extend(["--input", args.input])
         if args.bioproject:
             align_args.extend(["--bioproject", args.bioproject])
+        if args.srr:
+            align_args.extend(["--srr", args.srr])
         if args.amplicon:
             align_args.append("--amplicon")
         if args.deduplicate:
@@ -104,6 +115,8 @@ def main(argv: list[str] | None = None) -> int:
             align_args.append("--verbose")
         if args.force_reference:
             align_args.append("--force-reference")
+        if args.cleanup:
+            align_args.append("--cleanup")
         return align_module.main(align_args)
 
     parser.print_help()

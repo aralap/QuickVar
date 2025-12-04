@@ -1362,6 +1362,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--bioproject",
         help="NCBI BioProject ID (e.g., PRJNA123456) to download and process SRA files",
     )
+    parser.add_argument(
+        "--srr",
+        help="Single SRA run ID (e.g., SRR123456) to download and process",
+    )
     parser.add_argument("--output", default=DEFAULT_OUTPUT_NAME, help="Directory to write results (default: Results)")
     parser.add_argument("--threads", type=int, default=0, help="Number of CPU threads (default: auto)")
     parser.add_argument("--ploidy", type=int, default=1, help="Organism ploidy for variant calling (default: haploid)")
@@ -1389,7 +1393,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--cleanup",
         action="store_true",
-        help="In --bioproject mode, delete FASTQ and BAM files for each SRA run after it finishes",
+        help="In --bioproject or --srr mode, delete FASTQ and BAM files after processing",
     )
     return parser.parse_args(argv)
 
@@ -1399,12 +1403,14 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(args.verbose)
 
     # Validate arguments
-    if not args.input and not args.bioproject:
-        logging.error("Either --input or --bioproject must be provided")
+    if not args.input and not args.bioproject and not args.srr:
+        logging.error("Either --input, --bioproject, or --srr must be provided")
         return 1
     
-    if args.input and args.bioproject:
-        logging.error("Cannot use both --input and --bioproject. Use one or the other.")
+    # Check for conflicting arguments
+    provided = sum([bool(args.input), bool(args.bioproject), bool(args.srr)])
+    if provided > 1:
+        logging.error("Cannot use multiple input options. Use only one of --input, --bioproject, or --srr.")
         return 1
 
     output_dir = Path(args.output).expanduser().resolve()
@@ -1545,6 +1551,90 @@ def main(argv: list[str] | None = None) -> int:
             
         except Exception as e:
             logging.error(f"Failed to process BioProject {args.bioproject}: {e}")
+            return 1
+    elif args.srr:
+        # Handle single SRR run
+        run_id = args.srr
+        logging.info(f"Processing SRA run {run_id}...")
+        
+        try:
+            # Create output subfolder for this SRA run
+            sra_output_dir = output_dir / run_id
+            sra_output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create temporary directory for FASTQ files for this run
+            fastq_temp_dir = sra_output_dir / "fastq"
+            
+            run_completed = False
+            
+            # Optionally prefetch (for better caching)
+            sra_file = None
+            if not args.skip_prefetch:
+                sra_file = prefetch_sra(run_id)
+            
+            # Convert to FASTQ
+            fastq_files = fasterq_dump(
+                run_id, 
+                fastq_temp_dir, 
+                sra_file=sra_file, 
+                threads=threads
+            )
+            
+            if not fastq_files:
+                logging.error(f"No FASTQ files generated for {run_id}")
+                return 1
+            
+            # Group FASTQ files into samples
+            fastqs = discover_fastqs(fastq_temp_dir)
+            samples = group_samples(fastqs)
+            
+            # Process each sample from this SRA run
+            for sample in samples:
+                # Use the SRA run ID as the sample name prefix
+                original_name = sample.name
+                sample.name = f"{run_id}_{original_name}"
+                
+                align_sample(
+                    sample,
+                    reference,
+                    sra_output_dir,  # Results go in SRA-specific subfolder
+                    threads,
+                    args.keep_intermediate,
+                    args.ploidy,
+                    args.amplicon,
+                    args.deduplicate,
+                    args.annotate,
+                    args.reference,
+                )
+            
+            # If we reached here without exceptions, mark run as completed
+            run_completed = True
+
+            # Optional cleanup: remove FASTQ and BAM files for this run
+            if args.cleanup and run_completed:
+                logging.info(f"Cleaning up intermediates for SRA run {run_id} (FASTQ and BAM files)")
+                # Remove FASTQ directory for this run
+                if fastq_temp_dir.exists():
+                    try:
+                        shutil.rmtree(fastq_temp_dir)
+                    except Exception as e:
+                        logging.warning(f"Failed to remove FASTQ directory {fastq_temp_dir}: {e}")
+
+                # Remove BAM files and their indexes under this SRA output directory
+                for bam_path in sra_output_dir.rglob("*.bam"):
+                    try:
+                        bam_index = bam_path.with_suffix(bam_path.suffix + ".bai")
+                        if bam_index.exists():
+                            bam_index.unlink()
+                        bam_path.unlink()
+                    except Exception as e:
+                        logging.warning(f"Failed to remove BAM file {bam_path}: {e}")
+            
+            logging.info(f"Completed processing SRA run {run_id}")
+            return 0
+            
+        except Exception as e:
+            logging.error(f"Failed to process SRA run {run_id}: {e}")
             return 1
     else:
         # Standard processing of local FASTQ files
